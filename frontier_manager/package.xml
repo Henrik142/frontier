@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>frontier_manager</name>
+  <version>0.0.0</version>
+  <description>Frontier detection and map management.</description>
+
+  <maintainer email="someones.mail.address@tuhh.de">Someones name</maintainer>
+  <license>GPLv2</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>environment_map</depend>
+  <depend>frontier_perception</depend>
+  <depend>path_searching</depend>
+  <depend>eigen3_cmake_module</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
