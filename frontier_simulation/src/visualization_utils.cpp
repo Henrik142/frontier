@@ -92,7 +92,8 @@ void VisualizationUtils::drawRobotFOV(visualization_msgs::msg::Marker & marker_f
     createFOVMarkers(marker_fov, camera_pos.x(), camera_pos.y(), yaw);
 }
 
-void VisualizationUtils::drawMap(nav_msgs::msg::OccupancyGrid & grid_msg, const Map & map) {
+void VisualizationUtils::drawMap(nav_msgs::msg::OccupancyGrid & grid_msg, const Map & map,
+                                 bool show_inflation) {
     int CellsTotal = map.getVoxelNum();
     int CellsX = map.getVoxelNumX();
     int CellsY = map.getVoxelNumY();
@@ -107,8 +108,14 @@ void VisualizationUtils::drawMap(nav_msgs::msg::OccupancyGrid & grid_msg, const 
     grid_msg.data.resize(CellsTotal);
     for (int i = 0; i < CellsX; ++i) {
         for (int j = 0; j < CellsY; ++j) {
-            int occ = map.getOccupancy(Eigen::Vector2i(i, j));
-            //int occ = map.getInflatedOccupancy(Eigen::Vector2i(i, j));
+            int occ;
+            if (show_inflation) {
+                occ = map.getInflatedOccupancy(Eigen::Vector2i(i, j));
+            }
+            else {
+                occ = map.getOccupancy(Eigen::Vector2i(i, j));
+            }
+
             int address = map.toAddress(i, j);
             if (occ == Map::UNKNOWN) {
                 grid_msg.data[address] = -1;

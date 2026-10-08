@@ -30,7 +30,8 @@ public:
         const geometry_msgs::msg::PoseStamped::ConstSharedPtr & camera_pose_msg);
     void drawRobotFOV(visualization_msgs::msg::Marker & marker_fov,
         const Eigen::Vector2d & camera_pos, const double yaw);
-    void drawMap(nav_msgs::msg::OccupancyGrid & grid_msg, const Map & map);
+    void drawMap(nav_msgs::msg::OccupancyGrid & grid_msg, const Map & map,
+        bool show_inflation = false);
     void drawFrontiers(visualization_msgs::msg::Marker & marker_cells,
         visualization_msgs::msg::Marker & marker_viewpoints,
         visualization_msgs::msg::Marker & marker_robot_pos,

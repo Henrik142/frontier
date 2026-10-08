@@ -11,6 +11,7 @@ PathPlanningManager::PathPlanningManager(const std::shared_ptr<Map> & map) : Nod
     // TODO: find the actual values of these parameters for the cost function
     ViewNode::vm_ = vm_;        // maximum velocity
     ViewNode::yd_ = yd_;        // maximum yaw rate
+    ViewNode::w_y = w_y_;          // yaw change weight
     ViewNode::w_dir_ = w_dir_;     // motion consistency weight
 
     // Initialize utils
@@ -40,6 +41,7 @@ PathPlanningManager::PathPlanningManager(const std::shared_ptr<Map> & map) : Nod
     publisher_trajectory_ = this->create_publisher<nav_msgs::msg::Path>("frontier/trajectory", 10);
     publisher_global_path_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/global_path", 10);
     publisher_path_to_next_goal_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/path_to_next_goal", 10);
+    publisher_refined_views_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/refined_views", 10);
     publisher_next_viewpoint_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/next_viewpoint", 10);
     publisher_frontiers_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/cells", 10);
     publisher_viewpoints_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/viewpoints", 10);
@@ -101,7 +103,8 @@ void PathPlanningManager::initParams() {
     declare_parameter<double>("frontier.candidate_rmin", 0.1);
     declare_parameter<double>("frontier.candidate_rmax", 0.4);
     declare_parameter<double>("frontier.candidate_dphi", 22.5);
-    declare_parameter<double>("frontier.min_clearance", 0.1);
+    declare_parameter<double>("frontier.min_candidate_dist", 0.1);
+    declare_parameter<double>("frontier.min_candidate_yaw_diff", 5.0);
     declare_parameter<int>("frontier.min_visib_num", 2);
 
     frontier_params_.update_inflation_size = get_parameter("frontier.update_inflation_size").as_double();
@@ -116,18 +119,26 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "frontier.candidate_rmax=%f", frontier_params_.candidate_rmax);
     frontier_params_.candidate_dphi = get_parameter("frontier.candidate_dphi").as_double();
     RCLCPP_INFO(get_logger(), "frontier.candidate_dphi=%f", frontier_params_.candidate_dphi);
-    frontier_params_.min_clearance = get_parameter("frontier.min_clearance").as_double();
-    RCLCPP_INFO(get_logger(), "frontier.min_clearance=%f", frontier_params_.min_clearance);
+    frontier_params_.min_candidate_dist = get_parameter("frontier.min_candidate_dist").as_double();
+    RCLCPP_INFO(get_logger(), "frontier.min_candidate_dist=%f", frontier_params_.min_candidate_dist);
+    frontier_params_.min_candidate_yaw_diff = get_parameter("frontier.min_candidate_yaw_diff").as_double();
+    RCLCPP_INFO(get_logger(), "frontier.min_candidate_yaw_diff=%f", frontier_params_.min_candidate_yaw_diff);
     frontier_params_.min_visib_num = get_parameter("frontier.min_visib_num").as_int();
     RCLCPP_INFO(get_logger(), "frontier.min_visib_num=%d", frontier_params_.min_visib_num);
 
-    frontier_params_.candidate_dphi = frontier_params_.candidate_dphi * M_PI / 180.0; // Convert degrees to radians
+    // Convert degrees to radians
+    frontier_params_.candidate_dphi = frontier_params_.candidate_dphi * M_PI / 180.0;
+    frontier_params_.min_candidate_yaw_diff = frontier_params_.min_candidate_yaw_diff * M_PI / 180.0;
 
     // Path planning parameters
     declare_parameter<int>("path_planning.update_rate_ms", 200);
     declare_parameter<double>("path_planning.shorten_path_dist_thresh", 3.0);
+    declare_parameter<bool>("path_planning.refine_local", true);
+    declare_parameter<int>("path_planning.refine_num", 2);
+    declare_parameter<double>("path_planning.refine_radius", 1.0);
     declare_parameter<double>("path_planning.vm", 1.0);
     declare_parameter<double>("path_planning.yd", 0.7);
+    declare_parameter<double>("path_planning.w_y", 1.0);
     declare_parameter<double>("path_planning.w_dir", 1.0);
     declare_parameter<double>("path_planning.astar.resolution", 0.3);
     declare_parameter<double>("path_planning.astar.lambda_heu", 10.0);
@@ -138,10 +149,18 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "path_planning.update_rate_ms=%d", update_rate_ms_);
     shorten_path_dist_thresh_ = get_parameter("path_planning.shorten_path_dist_thresh").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.shorten_path_dist_thresh=%f", shorten_path_dist_thresh_);
+    refine_local_ = get_parameter("path_planning.refine_local").as_bool();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_local=%s", refine_local_ ? "true" : "false");
+    refine_num_ = get_parameter("path_planning.refine_num").as_int();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_num=%d", refine_num_);
+    refine_radius_ = get_parameter("path_planning.refine_radius").as_double();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_radius=%f", refine_radius_);
     vm_ = get_parameter("path_planning.vm").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.vm=%f", vm_);
     yd_ = get_parameter("path_planning.yd").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.yd=%f", yd_);
+    w_y_ = get_parameter("path_planning.w_y").as_double();
+    RCLCPP_INFO(get_logger(), "path_planning.w_y=%f", w_y_);
     w_dir_ = get_parameter("path_planning.w_dir").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.w_dir=%f", w_dir_);
     path_astar_params_.resolution = get_parameter("path_planning.astar.resolution").as_double();
@@ -255,15 +274,13 @@ int PathPlanningManager::pathPlanningCallback() {
         return NO_FRONTIER;
     }
 
-    // Find the global tour (i.e. the order in which to visit the clusters)
-    std::vector<int> tour;
-
     // Get cost matrix for current state and clusters
     Eigen::MatrixXd cost_mat;
     RCLCPP_INFO(this->get_logger(), "Updating frontier cost matrix");
     frontier_finder_->updateFrontierCostMatrix();
     frontier_finder_->getFullCostMatrix(hippo_position_, hippo_velocity_, hippo_yaw_, cost_mat);
 
+    // Print the cost matrix
     std::ostringstream oss;
     for (int i = 0; i < cost_mat.cols(); ++i) {
         if (i > 0) oss << ",";
@@ -272,10 +289,11 @@ int PathPlanningManager::pathPlanningCallback() {
     std::string result = oss.str();
     RCLCPP_INFO(this->get_logger(), "Costs from hippo_position_: [%s]", result.c_str());
 
-    // Compute the global tour
+    // Compute the global tour (i.e. the order in which to visit the clusters)
+    std::vector<int> tour;
     findGlobalTour(tour, cost_mat);
 
-    // Print the tour
+    // Print the global tour
     std::ostringstream tour_oss;
     for (size_t i = 0; i < tour.size(); ++i) {
         if (i > 0) tour_oss << ",";
@@ -299,19 +317,82 @@ int PathPlanningManager::pathPlanningCallback() {
     vis_utils_->drawPath(marker_global_path, path);
     publisher_global_path_->publish(marker_global_path);
 
+    // Find the target position and yaw for trajectory planning
+    Eigen::Vector2d next_pos;
+    double next_yaw;
+
+    // Refine the local tour if the flag is enabled
+    if (refine_local_) {
+        std::vector<Eigen::Vector2d> unrefined_pts;
+        std::vector<int> refined_ids;
+
+        // Number of clusters to consider in the refinement
+        int k_num = std::min(refine_num_, static_cast<int>(tour.size()));
+
+        // Make a cluster_indexer to access the frontier list easier
+        std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
+        for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
+            cluster_indexer.push_back(it);
+
+        // Get the top viewpoint positions of the first k clusters in the tour
+        for (int i = 0; i < k_num; ++i) {
+            auto tmp = cluster_indexer[tour[i]]->viewpoints_.front().robot_pos_;
+            unrefined_pts.push_back(tmp);
+            refined_ids.push_back(tour[i]);
+            if ((tmp - hippo_position_).norm() > refine_radius_ && refined_ids.size() >= 2) break;
+        }
+
+        // Get top N viewpoints for the next K frontiers
+        std::vector<std::vector<Eigen::Vector2d>> n_points;
+        std::vector<std::vector<double>> n_yaws;
+        int N = 6;
+        double max_decay = 0.5;
+        frontier_finder_->getViewpointsInfo(hippo_position_, hippo_yaw_, refined_ids, N, max_decay, n_points, n_yaws);
+
+        // Calculate the refined positions and yaws
+        std::vector<Eigen::Vector2d> refined_points;
+        std::vector<double> refined_yaws;
+        refineLocalTour(hippo_position_, hippo_velocity_, hippo_yaw_, n_points, n_yaws, refined_points, refined_yaws);
+
+        next_pos = refined_points.front();
+        next_yaw = refined_yaws.front();
+
+        // Publish the refined viewpoints
+        visualization_msgs::msg::Marker marker_refined_views;
+        marker_refined_views.header.frame_id = "map";
+        marker_refined_views.header.stamp = this->now();
+        vis_utils_->drawPath(marker_refined_views, refined_points);
+        publisher_refined_views_->publish(marker_refined_views);
+    } else {
+        // Make a cluster_indexer to access the frontier list easier
+        std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
+        for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
+            cluster_indexer.push_back(it);
+        
+        // Simply pick the top viewpoint of the first cluster in the tour
+        next_pos = cluster_indexer[tour.front()]->viewpoints_.front().robot_pos_;
+        next_yaw = cluster_indexer[tour.front()]->viewpoints_.front().yaw_;
+    }
+
+    // Plan trajectory to next viewpoint with increasing resolution
+    bool trajectory_found = false;
+    auto resolutions = {0.3, 0.2, 0.1};
+    for (auto res : resolutions) {
+        trajectory_planner_->astar_->reset();
+        trajectory_planner_->astar_->setResolution(res);
+        if (trajectory_planner_->astar_->search(hippo_position_, next_pos) == Astar::REACH_END) {
+            trajectory_found = true;
+            break;
+        }
+    }
+
+    /*
     // Retrieve the next viewpoint to visit and find a feasible trajectory to it
     // First, go through all viewpoints of the first cluster in the tour (from best to worst)
     // and try to find a path. As soon as a feasible trajectory is found, we stop searching further.
     // If no feasible trajectory is found for any viewpoint in the first cluster, we move on to
     // the next cluster in the tour. This is repeated until a feasible trajectory is found or all
     // clusters have been exhausted.
-
-    // TODO: Implement viewpoint refinement
-
-    Eigen::Vector2d next_pos;
-    double next_yaw;
-    bool trajectory_found = false;
-
     for (int next_cluster_id : tour) {
         for (auto & frontier_cluster : frontier_clusters) {
             if (frontier_cluster.id_ != next_cluster_id) {
@@ -356,6 +437,7 @@ int PathPlanningManager::pathPlanningCallback() {
             break;
         }
     }
+    */
 
     if (!trajectory_found) {
         RCLCPP_WARN(this->get_logger(), "Failed to find path to any viewpoint.");
@@ -440,6 +522,57 @@ void PathPlanningManager::findGlobalTour(std::vector<int> & tour,
     // Decrement each entry by 1 to account for the removed first entry
     for (int& x : tour) {
         x -= 1;
+    }
+}
+
+void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
+                                          const Eigen::Vector2d& cur_vel,
+                                          const double& cur_yaw,
+                                          const std::vector<std::vector<Eigen::Vector2d>>& n_points,
+                                          const std::vector<std::vector<double>>& n_yaws,
+                                          std::vector<Eigen::Vector2d>& refined_pts,
+                                          std::vector<double>& refined_yaws) {
+    // Create graph for viewpoints selection
+    GraphSearch<ViewNode> g_search;
+    std::vector<ViewNode::Ptr> last_group, cur_group;
+
+    // Add the current state
+    ViewNode::Ptr first(new ViewNode(cur_pos, cur_yaw));
+    first->vel_ = cur_vel;
+    g_search.addNode(first);
+    last_group.push_back(first);
+    ViewNode::Ptr final_node;
+
+    // Add viewpoints
+    for (int i = 0; i < n_points.size(); ++i) {
+        // Create nodes for viewpoints of one frontier
+        for (int j = 0; j < n_points[i].size(); ++j) {
+            ViewNode::Ptr node(new ViewNode(n_points[i][j], n_yaws[i][j]));
+            g_search.addNode(node);
+            // Connect a node to nodes in last group
+            for (auto nd : last_group)
+                g_search.addEdge(nd->id_, node->id_);
+            cur_group.push_back(node);
+
+            // Only keep the first viewpoint of the last local frontier
+            if (i == n_points.size() - 1) {
+                final_node = node;
+                break;
+            }
+        }
+        // Store nodes for this group for connecting edges
+        last_group = cur_group;
+        cur_group.clear();
+    }
+
+    // Search optimal sequence
+    std::vector<ViewNode::Ptr> path;
+    g_search.DijkstraSearch(first->id_, final_node->id_, path);
+
+    // Return searched sequence
+    for (int i = 1; i < path.size(); ++i) {
+        refined_pts.push_back(path[i]->pos_);
+        refined_yaws.push_back(path[i]->yaw_);
     }
 }
 

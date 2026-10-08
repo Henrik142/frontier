@@ -57,7 +57,7 @@ public:
   double yaw_;
 
   // Parameters shared among nodes
-  static double vm_, yd_, w_dir_;
+  static double vm_, yd_, w_y, w_dir_;
   static std::shared_ptr<Astar> astar_;
   static std::shared_ptr<RayCaster> caster_;
   static std::shared_ptr<Map> map_;

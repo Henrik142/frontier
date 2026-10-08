@@ -36,7 +36,8 @@ void FrontierFinder::initFrontierFinder(const std::shared_ptr<Map>& map,
     candidate_rmin_ = frontier_params.candidate_rmin;
     candidate_rmax_ = frontier_params.candidate_rmax;
     candidate_dphi_ = frontier_params.candidate_dphi;
-    min_clearance_ = frontier_params.min_clearance;
+    min_candidate_dist_ = frontier_params.min_candidate_dist;
+    min_candidate_yaw_diff_ = frontier_params.min_candidate_yaw_diff;
     min_visib_num_ = frontier_params.min_visib_num;
 }
 
@@ -318,6 +319,45 @@ int FrontierFinder::countVisibleCells(const Eigen::Vector2d& pos, const double& 
     return visib_num;
 }
 
+void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
+                                       const double& cur_yaw,
+                                       const std::vector<int>& ids,
+                                       const int& view_num,
+                                       const double& max_decay,
+                                       std::vector<std::vector<Eigen::Vector2d>>& points,
+                                       std::vector<std::vector<double>>& yaws) {
+    points.clear();
+    yaws.clear();
+    for (auto id : ids) {
+        // Scan all frontiers to find one with the same id
+        for (auto cluster : clusters_) {
+            if (cluster.id_ == id) {
+                // Get several top viewpoints that are far enough
+                std::vector<Eigen::Vector2d> pts;
+                std::vector<double> ys;
+                int visib_thresh = cluster.viewpoints_.front().visib_num_ * max_decay;
+                for (auto view : cluster.viewpoints_) {
+                    if (pts.size() >= view_num || view.visib_num_ <= visib_thresh) break;
+                    if ((view.pos_ - cur_pos).norm() < min_candidate_dist_ &&
+                        std::abs(view.yaw_ - cur_yaw) < min_candidate_yaw_diff_) continue;
+                    pts.push_back(view.robot_pos_);
+                    ys.push_back(view.yaw_);
+                }
+                if (pts.empty()) {
+                    // All viewpoints are very close, ignore the distance limit
+                    for (auto view : cluster.viewpoints_) {
+                        if (pts.size() >= view_num || view.visib_num_ <= visib_thresh) break;
+                        pts.push_back(view.robot_pos_);
+                        ys.push_back(view.yaw_);
+                    }
+                }
+                points.push_back(pts);
+                yaws.push_back(ys);
+            }
+        }
+    }
+}
+
 void FrontierFinder::getPathForTour(const Eigen::Vector2d& pos,
                                     const std::vector<int>& frontier_ids,
                                     std::vector<Eigen::Vector2d>& path) {
@@ -525,31 +565,6 @@ bool FrontierFinder::isClusterOutdated(const FrontierCluster& cluster) {
     }
     return false;
 }
-
-/*
-bool FrontierFinder::isPositionSafe(const Eigen::Vector2d& pos) {
-    // Check if the position is safe for the robot (not too close to occupied or unknown cells)
-    Eigen::Vector2i idx;
-    posToIndex(pos, idx);
-    if (!isInMap(idx)) return false;
-
-    // all cells witin a square box with side length:
-    // 2 * clearance_voxels + 1, centered at the position are checked for safety
-    // first, the distance is checked so cells in the corners of the square can be skipped
-    const int clearance_voxels = ceil(min_clearance_ / getResolution());
-    for (int dx = -clearance_voxels; dx <= clearance_voxels; ++dx) {
-        for (int dy = -clearance_voxels; dy <= clearance_voxels; ++dy) {
-            Eigen::Vector2i neighbor_idx = idx + Eigen::Vector2i(dx, dy);
-            Eigen::Vector2d neighbor_pos;
-            indexToPos(neighbor_idx, neighbor_pos);
-            if ((neighbor_pos - pos).norm() > min_clearance_) continue;
-            if (!isInMap(neighbor_idx)) return false;
-            if (getOccupancy(neighbor_idx) != Map::FREE) return false;
-        }
-    }
-    return true;    
-}
-    */
 
 void FrontierFinder::wrapYaw(double& yaw) {
     while (yaw > M_PI) yaw -= 2.0 * M_PI;

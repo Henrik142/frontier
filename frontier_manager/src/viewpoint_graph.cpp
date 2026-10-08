@@ -3,6 +3,7 @@
 // Static data
 double ViewNode::vm_;
 double ViewNode::yd_;
+double ViewNode::w_y;
 double ViewNode::w_dir_;
 std::shared_ptr<Astar> ViewNode::astar_;
 std::shared_ptr<RayCaster> ViewNode::caster_;
@@ -102,23 +103,34 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
 
     double yaw_cost = 0.0;
 
-    /*
-    Eigen::Vector2d dir_start = (path.empty() ? Eigen::Vector2d::Zero() : path.front() - p1);
-    Eigen::Vector2d dir_end = (path.empty() ? Eigen::Vector2d::Zero() : p2 - path.back());
+    // Calculate cost of yaw change at the start and end of the path
+
+    Eigen::Vector2d dir_start = Eigen::Vector2d::Zero();
+    Eigen::Vector2d dir_end = Eigen::Vector2d::Zero();
+
+    int num_points = path.size();
+    if (num_points > 1) {
+        dir_start = path[1] - path[0];
+        dir_end = path[num_points - 1] - path[num_points - 2];
+
+        dir_start.normalize();
+        dir_end.normalize();
+    }
 
     if (dir_start.norm() > 1e-9) {
         double cosine_start = std::clamp(std::cos(y1) * dir_start.x() + std::sin(y1) * dir_start.y(), -1.0, 1.0);
         double angle_start = std::acos(cosine_start);
-        yaw_cost += angle_start / yd_;
+        yaw_cost += w_y * angle_start;
     }
     if (dir_end.norm() > 1e-9) {
         double cosine_end = std::clamp(std::cos(y2) * dir_end.x() + std::sin(y2) * dir_end.y(), -1.0, 1.0);
         double angle_end = std::acos(cosine_end);
-        yaw_cost += angle_end / yd_;
+        yaw_cost += w_y * angle_end;
     }
-    */
 
+    // Total cost is the sum of position cost and yaw cost
+    return pos_cost + yaw_cost;
 
     // Total cost is the maximum of position cost and yaw cost
-    return std::max(pos_cost, yaw_cost);
+    // return std::max(pos_cost, yaw_cost);
 }

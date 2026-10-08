@@ -173,7 +173,7 @@ void MapUpdater::publishMap() {
     grid_msg.header.stamp = this->now();
     grid_msg.header.frame_id = "map";
 
-    vis_utils_->drawMap(grid_msg, *map_);
+    vis_utils_->drawMap(grid_msg, *map_, false);
 
     publisher_map_->publish(grid_msg);
 }

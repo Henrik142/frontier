@@ -25,17 +25,22 @@
       update_inflation_size: 0.2
       cluster_max_radius: 0.5
       candidate_rnum: 8
-      candidate_rmin: 0.2
-      candidate_rmax: 0.5
+      candidate_rmin: 0.05
+      candidate_rmax: 0.4
       candidate_dphi: 22.5
-      min_clearance: 0.1
+      min_candidate_dist: 0.0
+      min_candidate_yaw_diff: 5.0
       min_visib_num: 4
     path_planning:
       update_rate_ms: 200
       shorten_path_dist_thresh: 3.0
+      refine_local: true
+      refine_num: 4
+      refine_radius: 2.0
       vm: 1.0
-      yd: 0.7
-      w_dir: 0.5
+      yd: 1.0
+      w_y: 0.2
+      w_dir: 0.2
       astar:
         resolution: 0.3
         lambda_heu: 10.0

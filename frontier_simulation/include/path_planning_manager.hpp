@@ -25,6 +25,7 @@
 #include "visualization_utils.hpp"
 #include "perception_utils.hpp"
 #include "astar.hpp"
+#include "dijkstra_search.hpp"
 #include "trajectory_planner.hpp"
 
 enum EXPL_RESULT { WAITING_FOR_INIT, NO_FRONTIER, NO_TOUR, FAIL, SUCCEED };
@@ -42,6 +43,13 @@ private:
     void pathPlanningInit();
     int pathPlanningCallback();
     void findGlobalTour(std::vector<int> & tour, const Eigen::MatrixXd & cost_mat);
+    void refineLocalTour(const Eigen::Vector2d& cur_pos,
+                         const Eigen::Vector2d& cur_vel,
+                         const double& cur_yaw,
+                         const std::vector<std::vector<Eigen::Vector2d>>& n_points,
+                         const std::vector<std::vector<double>>& n_yaws,
+                         std::vector<Eigen::Vector2d>& refined_pts,
+                         std::vector<double>& refined_yaws);
     void shortenPath(std::vector<Eigen::Vector2d>& path);
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg);
     void publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters);
@@ -54,6 +62,7 @@ private:
 
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_global_path_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_path_to_next_goal_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_refined_views_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_next_viewpoint_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_frontiers_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_viewpoints_;
@@ -72,8 +81,15 @@ private:
     // Distance threshold for consecutive points for path shortening
     double shorten_path_dist_thresh_;
 
-    // Maximum velocity, maximum yaw rate, weight for motion consistency cost
-    double vm_, yd_, w_dir_;
+    // Flag to enable local tour refinement
+    bool refine_local_;
+    // Max. number and max. distance from robot of clusters to consider in refinement
+    int refine_num_;
+    double refine_radius_;
+
+    // Maximum velocity, maximum yaw rate, weight for yaw change,
+    // weight for motion consistency cost
+    double vm_, yd_, w_y_, w_dir_;
 
     // Update rate for the path planning loop (in milliseconds)
     int update_rate_ms_;

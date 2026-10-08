@@ -52,7 +52,8 @@ public:
         double candidate_rmin;
         double candidate_rmax;
         double candidate_dphi;
-        double min_clearance;
+        double min_candidate_dist;
+        double min_candidate_yaw_diff;
         int min_visib_num;
     };
 
@@ -62,7 +63,14 @@ public:
 
     void findFrontiers();
     void computeClustersToVisit();
-
+    
+    void getViewpointsInfo(const Eigen::Vector2d& cur_pos,
+                           const double& cur_yaw,
+                           const std::vector<int>& ids,
+                           const int& view_num,
+                           const double& max_decay,
+                           std::vector<std::vector<Eigen::Vector2d>>& points,
+                           std::vector<std::vector<double>>& yaws);
     void getPathForTour(const Eigen::Vector2d& pos,
                         const std::vector<int>& frontier_ids,
                         std::vector<Eigen::Vector2d>& path);
@@ -149,9 +157,9 @@ private:
 
     // Minimum and maximum radius/distance of sampled viewpoints from cluster centroid
     double candidate_rmax_, candidate_rmin_;
-    
-    // Minimum clearance that a viewpoint must have from occupied or unknown cells
-    double min_clearance_;
+
+    // Minimum distance and yaw difference for candidate viewpoints
+    double min_candidate_dist_, min_candidate_yaw_diff_;
     
     // Minimum number of visible frontier cells required for a viewpoint to be considered valid
     int min_visib_num_;
