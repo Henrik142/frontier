@@ -48,6 +48,10 @@ add_executable(path_follower
   src/path_follower_node.cpp
 )
 
+add_executable(velocity_control
+  src/velocity_control_node.cpp
+)
+
 add_executable(point_cloud_processor
   src/point_cloud_processor_node.cpp
 )
@@ -81,6 +85,8 @@ target_link_libraries(frontier_simulation Eigen3::Eigen ${PCL_LIBRARIES})
 
 target_link_libraries(hippo_visualization frontier_simulation)
 
+target_link_libraries(velocity_control frontier_simulation)
+
 target_link_libraries(map_and_pathplanning frontier_simulation)
 
 target_link_libraries(astar_test frontier_simulation)
@@ -109,6 +115,11 @@ install(
 
 install(
   TARGETS hippo_visualization
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  TARGETS velocity_control
   DESTINATION lib/${PROJECT_NAME}
 )
 

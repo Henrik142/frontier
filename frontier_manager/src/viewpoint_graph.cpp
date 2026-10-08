@@ -90,10 +90,35 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
 
     // Cost of yaw change
     // yaw cost = difference in yaw angles / maximum yaw rate
+    /*
     double diff = fabs(y2 - y1);
     diff = std::min(diff, 2 * M_PI - diff);
     double yaw_cost = diff / yd_;
+    */
+    // yaw cost = (difference in yaw angles between starting yaw and first path segment +
+    //             difference in yaw angles between last path segment and end yaw ) 
+    //             / maximum yaw rate
     
+
+    double yaw_cost = 0.0;
+
+    /*
+    Eigen::Vector2d dir_start = (path.empty() ? Eigen::Vector2d::Zero() : path.front() - p1);
+    Eigen::Vector2d dir_end = (path.empty() ? Eigen::Vector2d::Zero() : p2 - path.back());
+
+    if (dir_start.norm() > 1e-9) {
+        double cosine_start = std::clamp(std::cos(y1) * dir_start.x() + std::sin(y1) * dir_start.y(), -1.0, 1.0);
+        double angle_start = std::acos(cosine_start);
+        yaw_cost += angle_start / yd_;
+    }
+    if (dir_end.norm() > 1e-9) {
+        double cosine_end = std::clamp(std::cos(y2) * dir_end.x() + std::sin(y2) * dir_end.y(), -1.0, 1.0);
+        double angle_end = std::acos(cosine_end);
+        yaw_cost += angle_end / yd_;
+    }
+    */
+
+
     // Total cost is the maximum of position cost and yaw cost
     return std::max(pos_cost, yaw_cost);
 }

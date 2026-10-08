@@ -11,6 +11,10 @@
 #include <string>
 #include <memory>
 
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
+
 #include <Eigen/Eigen>
 
 #include "map.hpp"
@@ -55,10 +59,12 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_viewpoints_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_top_robot_positions_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_fov_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_velocity_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_string_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_yaw_;
 
     // Params
+    std::string vehicle_name_;
     PerceptionUtils::InitFOVParams fov_params_;
     Astar::InitAstarParams path_astar_params_, trajectory_astar_params_;
     FrontierFinder::InitFrontierParams frontier_params_;
@@ -80,6 +86,8 @@ private:
     std::shared_ptr<FrontierFinder> frontier_finder_;
     std::shared_ptr<TrajectoryPlanner> trajectory_planner_;
     std::shared_ptr<MapBuilder> map_builder_;
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     // Data (owned by MapUpdater, shared here)
     std::shared_ptr<Map> map_;

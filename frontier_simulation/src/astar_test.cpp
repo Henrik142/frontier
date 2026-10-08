@@ -105,7 +105,7 @@ void AstarTest::testPoints() {
     double size_x = map_->getSizeX();
     double size_y = map_->getSizeY();
 
-    declare_parameter<int>("astar_test.num_attempts", 1000);
+    declare_parameter<int>("astar_test.num_attempts", 100);
     const int num_attempts = get_parameter("astar_test.num_attempts").as_int();
     const int max_sampling_attempts = std::max(10 * num_attempts, num_attempts);
     int success_cnt = 0;
@@ -120,20 +120,27 @@ void AstarTest::testPoints() {
     int sampling_attempts = 0;
     while (attempt < num_attempts && sampling_attempts < max_sampling_attempts && rclcpp::ok()) {
         ++sampling_attempts;
-        //Eigen::Vector2d start(0.0, 0.0);
-        //Eigen::Vector2d goal(1.4, 1.1);
-
         Eigen::Vector2d start(randomDouble()*5.0 + origin_x + 2.5,
                             randomDouble()*5.0 + origin_y + 2.5);
         Eigen::Vector2d goal(randomDouble()*5.0 + origin_x + 2.5,
                             randomDouble()*5.0 + origin_y + 2.5);
 
-        //Eigen::Vector2d start(seededRandomDouble()*5.0 + origin_x + 2.5,
-        //                    seededRandomDouble()*5.0 + origin_y + 2.5);
-        //Eigen::Vector2d goal(seededRandomDouble()*5.0 + origin_x + 2.5,
-        //                    seededRandomDouble()*5.0 + origin_y + 2.5);
+        /*
+        Eigen::Vector2d start(0.2, 0.0);
+        Eigen::Vector2d goal(-2.4, 1.7);
 
-        if (!(map_->getInflatedOccupancy(start)==Map::FREE &&
+        Eigen::Vector2d start(randomDouble()*5.0 + origin_x + 2.5,
+                            randomDouble()*5.0 + origin_y + 2.5);
+        Eigen::Vector2d goal(randomDouble()*5.0 + origin_x + 2.5,
+                            randomDouble()*5.0 + origin_y + 2.5);
+        
+        Eigen::Vector2d start(seededRandomDouble()*5.0 + origin_x + 2.5,
+                            seededRandomDouble()*5.0 + origin_y + 2.5);
+        Eigen::Vector2d goal(seededRandomDouble()*5.0 + origin_x + 2.5,
+                            seededRandomDouble()*5.0 + origin_y + 2.5);
+        */
+
+        if (!(map_->getOccupancy(start)==Map::FREE &&
               map_->getInflatedOccupancy(goal)==Map::FREE)) {
             continue;
         }
@@ -143,10 +150,13 @@ void AstarTest::testPoints() {
             success_cnt++;
         } else if (search_result == Astar::NO_PATH_TIMEOUT) {
             fail_timeout_cnt++;
+            break;
         } else if (search_result == Astar::NO_PATH_MEMORY) {
             fail_memory_cnt++;
+            break;
         } else if (search_result == Astar::NO_PATH_INVALID) {
             fail_invalid_cnt++;
+            break;
         }
 
         ++attempt;

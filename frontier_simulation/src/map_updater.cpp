@@ -132,9 +132,17 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     // Update the map with the new point cloud
     RCLCPP_INFO(this->get_logger(), "Starting Map update.");
-    map_->inputPointCloud(*cloud, cloud->size(), camera_position);
+    
+    if (map_->getOccupancy(camera_position) == Map::FREE) {
+        map_->inputPointCloud(*cloud, cloud->size(), camera_position);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Camera position is not in free space, skipping point cloud input.");
+        return;
+    }
+
+    // Inflate obstacles and update the ESDF
     map_->inflateObstacles();
-    map_->updateESDF2d();
+    //map_->updateESDF2d();
 
     // Publish the map
     publishMap();

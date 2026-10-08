@@ -51,6 +51,9 @@ public:
         const Map & map, double max_dist);
     void drawTarget(visualization_msgs::msg::Marker & marker_target,
         const Eigen::Vector2d & target_position);
+    void drawVelocity(visualization_msgs::msg::Marker & marker_velocity,
+        const Eigen::Vector2d & position,
+        const Eigen::Vector2d & velocity);
         
 private:
     void createFOVMarkers(visualization_msgs::msg::Marker& marker_fov, 

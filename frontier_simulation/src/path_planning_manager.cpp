@@ -1,12 +1,19 @@
 #include "path_planning_manager.hpp"
 
 PathPlanningManager::PathPlanningManager(const std::shared_ptr<Map> & map) : Node("path_planning_manager") {
+    // Initialize the map
     map_ = map;
-
     map_builder_.reset(new MapBuilder(map_.get()));
 
+    // Initialize parameters
     initParams();
 
+    // TODO: find the actual values of these parameters for the cost function
+    ViewNode::vm_ = vm_;        // maximum velocity
+    ViewNode::yd_ = yd_;        // maximum yaw rate
+    ViewNode::w_dir_ = w_dir_;     // motion consistency weight
+
+    // Initialize utils
     vis_utils_.reset(new VisualizationUtils());
     vis_utils_->initVisUtils(fov_params_);
 
@@ -20,16 +27,16 @@ PathPlanningManager::PathPlanningManager(const std::shared_ptr<Map> & map) : Nod
     ViewNode::astar_->init(path_astar_params_, map_);
     ViewNode::map_ = map_;
 
-    // TODO: find the actual values of these parameters for the cost function
-    ViewNode::vm_ = vm_;        // maximum velocity
-    ViewNode::yd_ = yd_;        // maximum yaw rate
-    ViewNode::w_dir_ = w_dir_;     // motion consistency weight
-
     double resolution = map_->getResolution();
     Eigen::Vector2d origin(map_->getOriginX(), map_->getOriginY());
     ViewNode::caster_.reset(new RayCaster);
     ViewNode::caster_->setParams(resolution, origin);
 
+    // TF buffer + listener: subscribes to /tf and /tf_static in the background
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+    // Initialize publishers and subscribers
     publisher_trajectory_ = this->create_publisher<nav_msgs::msg::Path>("frontier/trajectory", 10);
     publisher_global_path_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/global_path", 10);
     publisher_path_to_next_goal_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/path_to_next_goal", 10);
@@ -38,6 +45,7 @@ PathPlanningManager::PathPlanningManager(const std::shared_ptr<Map> & map) : Nod
     publisher_viewpoints_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/viewpoints", 10);
     publisher_top_robot_positions_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/top_robot_positions", 10);
     publisher_fov_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/viewpoints_fov", 10);
+    publisher_velocity_ = this->create_publisher<visualization_msgs::msg::Marker>("velocity", 10);
     publisher_string_ = this->create_publisher<std_msgs::msg::String>("frontier/status", 10);
     publisher_yaw_ = this->create_publisher<std_msgs::msg::Float64>("frontier/next_yaw", 10);
 
@@ -63,6 +71,8 @@ PathPlanningManager::~PathPlanningManager() {
 }
 
 void PathPlanningManager::initParams() {
+    vehicle_name_ = declare_parameter<std::string>("vehicle_name", "");
+
     // FOV parameters
     declare_parameter<double>("fov.offset_x", 0.2);
     declare_parameter<double>("fov.offset_y", 0.0);
@@ -207,9 +217,6 @@ void PathPlanningManager::pathPlanningInit() {
             return;
         }
 
-        double target_x = hippo_position_.x() + std::cos(target_yaw);
-        double target_y = hippo_position_.y() + std::sin(target_yaw);
-
         nav_msgs::msg::Path path_msg;
         path_msg.header.frame_id = "map";
         path_msg.header.stamp = this->now();
@@ -218,21 +225,19 @@ void PathPlanningManager::pathPlanningInit() {
         pose_hippo.pose.position.x = hippo_position_.x();
         pose_hippo.pose.position.y = hippo_position_.y();
         pose_hippo.pose.position.z = 0.0;
+
+        path_msg.poses.push_back(pose_hippo);
         path_msg.poses.push_back(pose_hippo);
 
-        geometry_msgs::msg::PoseStamped pose_target;
-        pose_target.pose.position.x = target_x;
-        pose_target.pose.position.y = target_y;
-        pose_target.pose.position.z = 0.0;
-        path_msg.poses.push_back(pose_target);
+        std_msgs::msg::Float64 target_yaw_msg;
+        target_yaw_msg.data = target_yaw;
 
         publisher_trajectory_->publish(path_msg);
+        publisher_yaw_->publish(target_yaw_msg);
     }
 }
 
 int PathPlanningManager::pathPlanningCallback() {
-    // TODO: Sync this callback with the odometry updates to ensure consistency.
-
     // only execute if path planning has been initialized
     if (!path_planning_initialized_)
         return WAITING_FOR_INIT;
@@ -294,21 +299,78 @@ int PathPlanningManager::pathPlanningCallback() {
     vis_utils_->drawPath(marker_global_path, path);
     publisher_global_path_->publish(marker_global_path);
 
-    // Retrieve the next viewpoint to visit
+    // Retrieve the next viewpoint to visit and find a feasible trajectory to it
+    // First, go through all viewpoints of the first cluster in the tour (from best to worst)
+    // and try to find a path. As soon as a feasible trajectory is found, we stop searching further.
+    // If no feasible trajectory is found for any viewpoint in the first cluster, we move on to
+    // the next cluster in the tour. This is repeated until a feasible trajectory is found or all
+    // clusters have been exhausted.
+
     // TODO: Implement viewpoint refinement
-    // right now we just pick the first (best) viewpoint of each cluster
+
     Eigen::Vector2d next_pos;
     double next_yaw;
+    bool trajectory_found = false;
 
-    int next_cluster_id = tour.front();
-    for (auto & frontier_cluster : frontier_clusters) {
-        if (frontier_cluster.id_ == next_cluster_id) {
-            next_pos = frontier_cluster.viewpoints_.front().robot_pos_;
-            next_yaw = frontier_cluster.viewpoints_.front().yaw_;
-            RCLCPP_INFO(this->get_logger(), "Next viewpoint position: [%f, %f], yaw: [%f]", next_pos.x(), next_pos.y(), next_yaw);
+    for (int next_cluster_id : tour) {
+        for (auto & frontier_cluster : frontier_clusters) {
+            if (frontier_cluster.id_ != next_cluster_id) {
+                continue;
+            }
+
+            for (std::size_t i = 0; i < frontier_cluster.viewpoints_.size(); ++i) {
+                auto & viewpoint = frontier_cluster.viewpoints_[i];
+                next_pos = viewpoint.robot_pos_;
+                next_yaw = viewpoint.yaw_;
+
+                // When considering the best viewpoint:
+                // Skip to the second-best viewpoint if the Hippo is already
+                // sufficiently close to and aligned with the best one
+                if (i == 0 &&
+                    (hippo_position_ - next_pos).norm() < 0.05 && 
+                    std::abs(hippo_yaw_ - next_yaw) < 0.1) {
+                    continue;
+                }
+
+                // Plan trajectory to next viewpoint with increasing resolution
+                auto resolutions = {0.3, 0.2, 0.1};
+                for (auto res : resolutions) {
+                    trajectory_planner_->astar_->reset();
+                    trajectory_planner_->astar_->setResolution(res);
+                    if (trajectory_planner_->astar_->search(hippo_position_, next_pos) == Astar::REACH_END) {
+                        trajectory_found = true;
+                        break;
+                    }
+                }
+
+                if (trajectory_found) {
+                    RCLCPP_INFO(this->get_logger(), "Next viewpoint position: [%f, %f], yaw: [%f]", next_pos.x(), next_pos.y(), next_yaw);
+                    break;
+                }
+            }
+            
+            break;
+            
+        }
+        if (trajectory_found) {
             break;
         }
     }
+
+    if (!trajectory_found) {
+        RCLCPP_WARN(this->get_logger(), "Failed to find path to any viewpoint.");
+        return FAIL;
+    }
+
+    std::vector<Eigen::Vector2d> path_next_goal = trajectory_planner_->astar_->getPath();
+    shortenPath(path_next_goal);
+
+    // TODO: Improve the trajectory planning, e.g., by smoothing the path,
+    // ensuring dynamic feasibility, and avoiding obstacles.
+
+    /*
+    Publish everything
+    */
 
     // Publish the target yaw of the next viewpoint
     std_msgs::msg::Float64 yaw_msg;
@@ -321,19 +383,6 @@ int PathPlanningManager::pathPlanningCallback() {
     marker_next_viewpoint.header.stamp = this->now();
     vis_utils_->drawNextViewpoint(marker_next_viewpoint, next_pos, next_yaw);
     publisher_next_viewpoint_->publish(marker_next_viewpoint);
-
-    // Plan trajectory to next viewpoint
-    trajectory_planner_->astar_->reset();
-    if (trajectory_planner_->astar_->search(hippo_position_, next_pos) != Astar::REACH_END) {
-        RCLCPP_WARN(this->get_logger(), "Failed to find path to next viewpoint.");
-        return FAIL;
-    }
-
-    std::vector<Eigen::Vector2d> path_next_goal = trajectory_planner_->astar_->getPath();
-    shortenPath(path_next_goal);
-
-    // TODO: Improve the trajectory planning, e.g., by smoothing the path,
-    // ensuring dynamic feasibility, and avoiding obstacles.
 
     // Publish the path to the next goal
     // This is what the path follower subscribes to
@@ -349,6 +398,7 @@ int PathPlanningManager::pathPlanningCallback() {
     }
     publisher_trajectory_->publish(path_msg);
 
+    // Publish path markers for visualization
     visualization_msgs::msg::Marker marker_path_to_next_goal;
     marker_path_to_next_goal.header.frame_id = "map";
     marker_path_to_next_goal.header.stamp = this->now();
@@ -424,18 +474,49 @@ void PathPlanningManager::shortenPath(std::vector<Eigen::Vector2d>& path) {
 }
 
 void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
-    Eigen::Vector2d hippo_velocity_body;
-
+    // Get position and yaw
     hippo_position_ << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
-    hippo_velocity_body << odometry_msg->twist.twist.linear.x, odometry_msg->twist.twist.linear.y;
     hippo_yaw_ = tf2::getYaw(odometry_msg->pose.pose.orientation);
 
-    hippo_velocity_ = Eigen::Rotation2Dd(hippo_yaw_) * hippo_velocity_body;
+    // Get velocity in the child frame and transform it to the map frame
+    geometry_msgs::msg::Vector3Stamped velocity_child;
+    velocity_child.header.stamp = odometry_msg->header.stamp;
+    velocity_child.header.frame_id = odometry_msg->child_frame_id;
+    velocity_child.vector = odometry_msg->twist.twist.linear;
+
+    geometry_msgs::msg::TransformStamped transform;
+    
+    // get the transform from camera frame to map frame
+    try
+    {
+      transform = tf_buffer_->lookupTransform(
+        "map",                                       // target frame
+        odometry_msg->child_frame_id,                // source frame
+        odometry_msg->header.stamp,                  // time stamp for the transform
+        rclcpp::Duration::from_seconds(0.2));        // timeout for the transform
+    }
+    catch (const tf2::TransformException & ex)
+    {
+      RCLCPP_WARN(this->get_logger(), "Could not transform velocity from '%s' to '%s': %s",
+                  odometry_msg->child_frame_id.c_str(), "map", ex.what());
+      return;
+    }
+    
+    geometry_msgs::msg::Vector3Stamped velocity_map;
+    tf2::doTransform(velocity_child, velocity_map, transform);
+
+    hippo_velocity_ << velocity_map.vector.x, velocity_map.vector.y;
 
     if (!odometry_received_) {
         RCLCPP_INFO(this->get_logger(), "Odometry received by path planner for the first time.");
         odometry_received_ = true;
     }
+
+    visualization_msgs::msg::Marker marker_velocity;
+    marker_velocity.header.frame_id = "map";
+    marker_velocity.header.stamp = this->now();
+    vis_utils_->drawVelocity(marker_velocity, hippo_position_, hippo_velocity_);
+    publisher_velocity_->publish(marker_velocity);
 }
 
 void PathPlanningManager::publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters) {

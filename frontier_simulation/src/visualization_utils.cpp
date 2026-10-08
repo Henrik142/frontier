@@ -408,6 +408,36 @@ void VisualizationUtils::drawTarget(visualization_msgs::msg::Marker & marker_tar
     marker_target.color.a = 1.0;
 }
 
+void VisualizationUtils::drawVelocity(visualization_msgs::msg::Marker & marker_velocity,
+        const Eigen::Vector2d & position,
+        const Eigen::Vector2d & velocity) {
+    marker_velocity.ns = "robot_velocity";
+    marker_velocity.id = 0;
+    marker_velocity.type = visualization_msgs::msg::Marker::ARROW;
+    marker_velocity.action = visualization_msgs::msg::Marker::ADD;
+
+    double scale = 0.4 *velocity.norm() / 1.0;
+
+    double yaw = std::atan2(velocity.y(), velocity.x());
+    marker_velocity.pose.position.x = position.x() - (scale/2) * std::cos(yaw);
+    marker_velocity.pose.position.y = position.y() - (scale/2) * std::sin(yaw);
+    marker_velocity.pose.position.z = 0.0;
+    tf2::Quaternion q;
+    q.setRPY(0, 0, yaw);
+    marker_velocity.pose.orientation.x = q.x();
+    marker_velocity.pose.orientation.y = q.y();
+    marker_velocity.pose.orientation.z = q.z();
+    marker_velocity.pose.orientation.w = q.w();
+
+    marker_velocity.scale.x = scale;
+    marker_velocity.scale.y = 0.05;
+    marker_velocity.scale.z = 0.05;
+    marker_velocity.color.r = 1.0;
+    marker_velocity.color.g = 0.0;
+    marker_velocity.color.b = 0.0;
+    marker_velocity.color.a = 1.0;
+}
+
 void VisualizationUtils::createFOVMarkers(visualization_msgs::msg::Marker & marker_fov, 
         const double origin_x, const double origin_y, const double yaw) {
     geometry_msgs::msg::Point origin;

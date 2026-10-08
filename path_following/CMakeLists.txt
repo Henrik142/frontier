@@ -11,6 +11,7 @@ find_package(hippo_control_msgs REQUIRED)
 
 add_library(path_following STATIC
   src/path_follower.cpp
+  src/velocity_control.cpp
 )
 
 target_include_directories(path_following PUBLIC

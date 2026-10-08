@@ -16,6 +16,8 @@ public:
     ~PathFollower();
 
 private:
+    void initParams();
+
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg);
     void pathCallback(const nav_msgs::msg::Path::SharedPtr path_msg);
     void yawCallback(const std_msgs::msg::Float64::SharedPtr yaw_msg);
@@ -28,6 +30,7 @@ private:
     rclcpp::Publisher<hippo_control_msgs::msg::RollTarget>::SharedPtr publisher_roll_target_;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr publisher_position_target_;
     rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr publisher_heading_target_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_velocity_target_;
 
     // Params
     double roll_setpoint_;

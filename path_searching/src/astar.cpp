@@ -121,8 +121,11 @@ int Astar::search(const Eigen::Vector2d& start_pt, const Eigen::Vector2d& end_pt
                 if (!(getInflatedOccupancy(nbr_pos) == Map::FREE))
                     continue;
                 
-                bool safe = checkLineOfSight(cur_pos, nbr_pos);
-                if (!safe) continue;
+                // Check line of sight, except for the start point
+                if (!(cur_pos == start_pt)) {
+                    bool safe = checkLineOfSight(cur_pos, nbr_pos);
+                    if (!safe) continue;
+                }
 
                 // Check not in close set
                 if (close_set_map_.find(nbr_idx) != close_set_map_.end()) continue;

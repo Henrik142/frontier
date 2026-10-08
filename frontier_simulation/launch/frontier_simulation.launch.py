@@ -50,12 +50,20 @@ def generate_launch_description() -> LaunchDescription:
                  },
                              LaunchConfiguration('config_file')])
 
+    node5 = Node(executable='velocity_control',
+                 package='frontier_simulation',
+                 parameters=[{
+                     'vehicle_name': LaunchConfiguration('vehicle_name')
+                 },
+                             LaunchConfiguration('config_file')])
+
     group = GroupAction([
         PushRosNamespace(LaunchConfiguration('vehicle_name')),
         node1,
         node2,
         node3,
         node4,
+        node5,
     ])
     launch_description.add_action(group)
 
