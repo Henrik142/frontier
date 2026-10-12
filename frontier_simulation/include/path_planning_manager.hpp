@@ -86,8 +86,12 @@ private:
     // Flag to enable local tour refinement
     bool refine_local_;
     // Max. number and max. distance from robot of clusters to consider in refinement
-    int refine_num_;
+    int refine_num_clusters_;
     double refine_radius_;
+    // Number of viewpoints to consider for each cluster and the
+    // maximum decay factor for refinement
+    int refine_num_viewpoints_;
+    double refine_max_decay_;
 
     // Maximum velocity, maximum yaw rate, weight for yaw change,
     // weight for motion consistency cost

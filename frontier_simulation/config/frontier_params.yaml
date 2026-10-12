@@ -24,19 +24,23 @@
     frontier:
       update_inflation_size: 0.2
       cluster_max_radius: 0.5
-      candidate_rnum: 8
-      candidate_rmin: 0.05
-      candidate_rmax: 0.4
-      candidate_dphi: 22.5
-      min_candidate_dist: 0.0
+      candidate_rnum: 2
+      candidate_rmin: 0.2
+      candidate_rmax: 0.3
+      candidate_dphi: 45.0
+      candidate_theta: 120.0
+      candidate_theta_num: 5
+      min_candidate_dist: 0.05
       min_candidate_yaw_diff: 5.0
       min_visib_num: 4
     path_planning:
       update_rate_ms: 200
       shorten_path_dist_thresh: 3.0
       refine_local: true
-      refine_num: 4
+      refine_num_clusters: 4
       refine_radius: 2.0
+      refine_num_viewpoints: 25
+      refine_max_decay: 0.5
       vm: 1.0
       yd: 1.0
       w_y: 0.2

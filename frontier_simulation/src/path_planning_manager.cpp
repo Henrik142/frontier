@@ -107,6 +107,8 @@ void PathPlanningManager::initParams() {
     declare_parameter<double>("frontier.candidate_rmin", 0.1);
     declare_parameter<double>("frontier.candidate_rmax", 0.4);
     declare_parameter<double>("frontier.candidate_dphi", 22.5);
+    declare_parameter<double>("frontier.candidate_theta", 180.0);
+    declare_parameter<int>("frontier.candidate_theta_num", 7);
     declare_parameter<double>("frontier.min_candidate_dist", 0.1);
     declare_parameter<double>("frontier.min_candidate_yaw_diff", 5.0);
     declare_parameter<int>("frontier.min_visib_num", 2);
@@ -123,6 +125,10 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "frontier.candidate_rmax=%f", frontier_params_.candidate_rmax);
     frontier_params_.candidate_dphi = get_parameter("frontier.candidate_dphi").as_double();
     RCLCPP_INFO(get_logger(), "frontier.candidate_dphi=%f", frontier_params_.candidate_dphi);
+    frontier_params_.candidate_theta = get_parameter("frontier.candidate_theta").as_double();
+    RCLCPP_INFO(get_logger(), "frontier.candidate_theta=%f", frontier_params_.candidate_theta);
+    frontier_params_.candidate_theta_num = get_parameter("frontier.candidate_theta_num").as_int();
+    RCLCPP_INFO(get_logger(), "frontier.candidate_theta_num=%d", frontier_params_.candidate_theta_num);
     frontier_params_.min_candidate_dist = get_parameter("frontier.min_candidate_dist").as_double();
     RCLCPP_INFO(get_logger(), "frontier.min_candidate_dist=%f", frontier_params_.min_candidate_dist);
     frontier_params_.min_candidate_yaw_diff = get_parameter("frontier.min_candidate_yaw_diff").as_double();
@@ -132,14 +138,17 @@ void PathPlanningManager::initParams() {
 
     // Convert degrees to radians
     frontier_params_.candidate_dphi = frontier_params_.candidate_dphi * M_PI / 180.0;
+    frontier_params_.candidate_theta = frontier_params_.candidate_theta * M_PI / 180.0;
     frontier_params_.min_candidate_yaw_diff = frontier_params_.min_candidate_yaw_diff * M_PI / 180.0;
 
     // Path planning parameters
     declare_parameter<int>("path_planning.update_rate_ms", 200);
     declare_parameter<double>("path_planning.shorten_path_dist_thresh", 3.0);
     declare_parameter<bool>("path_planning.refine_local", true);
-    declare_parameter<int>("path_planning.refine_num", 2);
+    declare_parameter<int>("path_planning.refine_num_clusters", 2);
     declare_parameter<double>("path_planning.refine_radius", 1.0);
+    declare_parameter<int>("path_planning.refine_num_viewpoints", 20);
+    declare_parameter<double>("path_planning.refine_max_decay", 0.5);
     declare_parameter<double>("path_planning.vm", 1.0);
     declare_parameter<double>("path_planning.yd", 0.7);
     declare_parameter<double>("path_planning.w_y", 1.0);
@@ -155,10 +164,14 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "path_planning.shorten_path_dist_thresh=%f", shorten_path_dist_thresh_);
     refine_local_ = get_parameter("path_planning.refine_local").as_bool();
     RCLCPP_INFO(get_logger(), "path_planning.refine_local=%s", refine_local_ ? "true" : "false");
-    refine_num_ = get_parameter("path_planning.refine_num").as_int();
-    RCLCPP_INFO(get_logger(), "path_planning.refine_num=%d", refine_num_);
+    refine_num_clusters_ = get_parameter("path_planning.refine_num_clusters").as_int();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_num_clusters=%d", refine_num_clusters_);
     refine_radius_ = get_parameter("path_planning.refine_radius").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.refine_radius=%f", refine_radius_);
+    refine_num_viewpoints_ = get_parameter("path_planning.refine_num_viewpoints").as_int();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_num_viewpoints=%d", refine_num_viewpoints_);
+    refine_max_decay_ = get_parameter("path_planning.refine_max_decay").as_double();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_max_decay=%f", refine_max_decay_);
     vm_ = get_parameter("path_planning.vm").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.vm=%f", vm_);
     yd_ = get_parameter("path_planning.yd").as_double();
@@ -272,6 +285,11 @@ int PathPlanningManager::pathPlanningCallback() {
     frontier_finder_->computeClustersToVisit();
     std::list<FrontierCluster> frontier_clusters = frontier_finder_->getFrontierClusters();
 
+    // Make a cluster_indexer to access the frontier list easier
+    std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
+    for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
+        cluster_indexer.push_back(it);
+
     // Publish the frontiers
     publishFrontierStatus(frontier_clusters);
 
@@ -333,14 +351,9 @@ int PathPlanningManager::pathPlanningCallback() {
         std::vector<int> refined_ids;
 
         // Number of clusters to consider in the refinement
-        int k_num = std::min(refine_num_, static_cast<int>(tour.size()));
+        int k_num = std::min(refine_num_clusters_, static_cast<int>(tour.size()));
 
-        // Make a cluster_indexer to access the frontier list easier
-        std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
-        for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
-            cluster_indexer.push_back(it);
-
-        // Get the top viewpoint positions of the first k clusters in the tour
+        // Store the single best viewpoint of the first k clusters in the tour
         for (int i = 0; i < k_num; ++i) {
             auto tmp = cluster_indexer[tour[i]]->viewpoints_.front().robot_pos_;
             unrefined_pts.push_back(tmp);
@@ -351,14 +364,24 @@ int PathPlanningManager::pathPlanningCallback() {
         // Get top N viewpoints for the next K frontiers
         std::vector<std::vector<Eigen::Vector2d>> n_points;
         std::vector<std::vector<double>> n_yaws;
-        int N = 6;
-        double max_decay = 0.5;
-        frontier_finder_->getViewpointsInfo(hippo_position_, hippo_yaw_, refined_ids, N, max_decay, n_points, n_yaws);
+        frontier_finder_->getViewpointsInfo(hippo_position_,
+                                            hippo_yaw_,
+                                            refined_ids,
+                                            refine_num_viewpoints_,
+                                            refine_max_decay_,
+                                            n_points,
+                                            n_yaws);
 
         // Calculate the refined positions and yaws
         std::vector<Eigen::Vector2d> refined_points;
         std::vector<double> refined_yaws;
-        refineLocalTour(hippo_position_, hippo_velocity_, hippo_yaw_, n_points, n_yaws, refined_points, refined_yaws);
+        refineLocalTour(hippo_position_,
+                        hippo_velocity_,
+                        hippo_yaw_,
+                        n_points,
+                        n_yaws,
+                        refined_points,
+                        refined_yaws);
 
         next_pos = refined_points.front();
         next_yaw = refined_yaws.front();
@@ -369,12 +392,7 @@ int PathPlanningManager::pathPlanningCallback() {
         marker_refined_views.header.stamp = this->now();
         vis_utils_->drawPath(marker_refined_views, refined_points);
         publisher_refined_views_->publish(marker_refined_views);
-    } else {
-        // Make a cluster_indexer to access the frontier list easier
-        std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
-        for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
-            cluster_indexer.push_back(it);
-        
+    } else {        
         // Simply pick the top viewpoint of the first cluster in the tour
         next_pos = cluster_indexer[tour.front()]->viewpoints_.front().robot_pos_;
         next_yaw = cluster_indexer[tour.front()]->viewpoints_.front().yaw_;
@@ -547,7 +565,7 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
     first->vel_ = cur_vel;
     g_search.addNode(first);
     last_group.push_back(first);
-    ViewNode::Ptr final_node;
+    //ViewNode::Ptr final_node;
 
     // Add viewpoints
     for (int i = 0; i < n_points.size(); ++i) {
@@ -560,11 +578,13 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
                 g_search.addEdge(nd->id_, node->id_);
             cur_group.push_back(node);
 
+            /*
             // Only keep the first viewpoint of the last local frontier
             if (i == n_points.size() - 1) {
                 final_node = node;
                 break;
             }
+            */
         }
         // Store nodes for this group for connecting edges
         last_group = cur_group;
@@ -573,7 +593,8 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
 
     // Search optimal sequence
     std::vector<ViewNode::Ptr> path;
-    g_search.DijkstraSearch(first->id_, final_node->id_, path);
+    // g_search.DijkstraSearch(first->id_, final_node->id_, path);
+    g_search.FullDijkstraSearch(first->id_, path);
 
     // Return searched sequence
     for (int i = 1; i < path.size(); ++i) {

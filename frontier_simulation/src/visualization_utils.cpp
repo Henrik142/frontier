@@ -197,6 +197,7 @@ void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_
         std::string frontier_str = "Frontier cluster " + std::to_string(++i) + ": ";
         frontier_str += std::to_string(cluster.cells_.size()) + " cells";
         frontier_str += " at average position (" + std::to_string(cluster.average_pos_.x()) + ", " + std::to_string(cluster.average_pos_.y()) + ") ";
+        frontier_str += " with " + std::to_string(cluster.viewpoints_.size()) + " viewpoints";
         frontier_status.push_back(frontier_str);
 
         // Add cells of this cluster to the marker
@@ -217,7 +218,7 @@ void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_
             marker_cells.colors.push_back(point_color);
 
             // Display the top n viewpoints for this cluster (if available)
-            int n = 4;
+            int n = 100;
             for (int k = 0; k < std::min(n, static_cast<int>(cluster.viewpoints_.size())); ++k) {
                 const auto& viewpoint = cluster.viewpoints_[k];
                 geometry_msgs::msg::Point point;

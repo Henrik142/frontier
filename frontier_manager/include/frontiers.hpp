@@ -52,6 +52,8 @@ public:
         double candidate_rmin;
         double candidate_rmax;
         double candidate_dphi;
+        double candidate_theta;
+        int candidate_theta_num;
         double min_candidate_dist;
         double min_candidate_yaw_diff;
         int min_visib_num;
@@ -152,8 +154,14 @@ private:
     double candidate_dphi_;
     // Number of sampled viewpoints at each angle (sampled radially)
     int candidate_rnum_;
-    // Total number of sampled viewpoints corresponds to:
-    // candidate_rnum_ * (2 * M_PI / candidate_dphi_)
+
+    // Total angular range for sampling viewpoints around the cluster centroid
+    double candidate_theta_;
+    // Number of angular samples within the total angular range
+    int candidate_theta_num_;
+
+    // Maximum number of sampled viewpoints corresponds to:
+    // candidate_rnum_ * (2 * M_PI / candidate_dphi_) * candidate_theta_num_
 
     // Minimum and maximum radius/distance of sampled viewpoints from cluster centroid
     double candidate_rmax_, candidate_rmin_;

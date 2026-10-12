@@ -73,16 +73,20 @@ void PathFollower::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odo
     viewpoint_position << current_path_.back().x(), current_path_.back().y(), target_depth;
 
     // Look in the direction of the viewpoint, if sufficiently close to viewpoint
-    if ((viewpoint_position - hippo_position).norm() < 0.05) {
+    if ((viewpoint_position - hippo_position).norm() < min_target_dist_) {
         target_position.x() = hippo_position.x() + std::cos(next_yaw_);
         target_position.y() = hippo_position.y() + std::sin(next_yaw_);
         target_velocity = 0.0;
+    }
+
+    /*
     // Jump to next waypoint if the first one is too close
     } else if ((target_position - hippo_position).norm() < min_target_dist_
         && current_path_.size() > 2) {
         target_position.x() = current_path_[2].x();
         target_position.y() = current_path_[2].y();
     }
+    */
 
     target_heading = (target_position - hippo_position).normalized();
 

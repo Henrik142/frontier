@@ -36,6 +36,8 @@ void FrontierFinder::initFrontierFinder(const std::shared_ptr<Map>& map,
     candidate_rmin_ = frontier_params.candidate_rmin;
     candidate_rmax_ = frontier_params.candidate_rmax;
     candidate_dphi_ = frontier_params.candidate_dphi;
+    candidate_theta_ = frontier_params.candidate_theta;
+    candidate_theta_num_ = frontier_params.candidate_theta_num;
     min_candidate_dist_ = frontier_params.min_candidate_dist;
     min_candidate_yaw_diff_ = frontier_params.min_candidate_yaw_diff;
     min_visib_num_ = frontier_params.min_visib_num;
@@ -242,7 +244,7 @@ void FrontierFinder::computeClustersToVisit() {
 // Sample viewpoints around cluster's average position, check coverage to the frontier cells
 void FrontierFinder::sampleViewpoints(FrontierCluster& cluster) {
     // Evaluate sample viewpoints on circles, find ones that cover most cells
-    for (double rc = candidate_rmin_, dr = (candidate_rmax_ - candidate_rmin_) / candidate_rnum_;
+    for (double rc = candidate_rmin_, dr = (candidate_rmax_ - candidate_rmin_) / (candidate_rnum_ - 1); 
        rc <= candidate_rmax_ + 1e-3; rc += dr) {
         for (double phi = -M_PI; phi < M_PI; phi += candidate_dphi_) {
             const Eigen::Vector2d sample_pos = cluster.average_pos_ + rc * Eigen::Vector2d(cos(phi), sin(phi));
@@ -267,24 +269,34 @@ void FrontierFinder::sampleViewpoints(FrontierCluster& cluster) {
             }
             if (mean_dir.norm() > 1e-9) {
                 avg_yaw = std::atan2(mean_dir.y(), mean_dir.x());
+            } else {
+                continue;
             }
 
-            // Compute associated robot position
-            percep_utils_->setPose(sample_pos, avg_yaw);
-            Eigen::Vector2d robot_pos;
-            percep_utils_->getRobotPos(robot_pos);
+            // For each candidate point, generate multiple viewpoints with yaw angles
+            // within the specified range around the average yaw angle to all cells of the cluster
+            for (int i = 0; i < candidate_theta_num_; ++i) {
+                double theta_i = -candidate_theta_ / 2 + i * (candidate_theta_ /
+                                                            (candidate_theta_num_  - 1));
+                double yaw_i = avg_yaw + theta_i;
 
-            // Check if robot position is:
-            // - in bounding box
-            // - at a safe distance from occupied cells
-            // - at a safe distance from unknown cells
-            if (!(getInflatedOccupancy(robot_pos) == Map::FREE)) continue;
+                // Compute associated robot position
+                percep_utils_->setPose(sample_pos, yaw_i);
+                Eigen::Vector2d robot_pos;
+                percep_utils_->getRobotPos(robot_pos);
 
-            // Compute the fraction of covered and visible cells
-            int visib_num = countVisibleCells(sample_pos, avg_yaw, cells);
-            if (visib_num >= min_visib_num_) {
-                Viewpoint vp = { sample_pos, avg_yaw, visib_num, robot_pos };
-                cluster.viewpoints_.push_back(vp);
+                // Check if robot position is:
+                // - in bounding box
+                // - at a safe distance from occupied cells
+                // - at a safe distance from unknown cells
+                if (!(getInflatedOccupancy(robot_pos) == Map::FREE)) continue;
+
+                // Compute the fraction of covered and visible cells
+                int visib_num = countVisibleCells(sample_pos, yaw_i, cells);
+                if (visib_num >= min_visib_num_) {
+                    Viewpoint vp = { sample_pos, yaw_i, visib_num, robot_pos };
+                    cluster.viewpoints_.push_back(vp);
+                }
             }
         }
     }
@@ -335,11 +347,18 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 // Get several top viewpoints that are far enough
                 std::vector<Eigen::Vector2d> pts;
                 std::vector<double> ys;
+                // Only viewpoints with more visible cells than a certain fraction of the
+                // top viewpoint are considered
                 int visib_thresh = cluster.viewpoints_.front().visib_num_ * max_decay;
+
                 for (auto view : cluster.viewpoints_) {
                     if (pts.size() >= view_num || view.visib_num_ <= visib_thresh) break;
+
+                    // If a viewpoint is too close to the current position and has a similar yaw,
+                    // it is considered reached by the robot and skipped
+                    double yaw_diff = std::remainder(view.yaw_ - cur_yaw, 2.0 * M_PI);
                     if ((view.pos_ - cur_pos).norm() < min_candidate_dist_ &&
-                        std::abs(view.yaw_ - cur_yaw) < min_candidate_yaw_diff_) continue;
+                        std::abs(yaw_diff) < min_candidate_yaw_diff_) continue;
                     pts.push_back(view.robot_pos_);
                     ys.push_back(view.yaw_);
                 }
