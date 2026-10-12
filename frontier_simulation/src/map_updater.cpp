@@ -36,6 +36,10 @@ std::shared_ptr<Map> MapUpdater::getMap() const {
     return map_;
 }
 
+std::shared_ptr<std::atomic_bool> MapUpdater::getMapReadyFlag() const {
+    return map_ready_;
+}
+
 void MapUpdater::initParams() {
     // FOV parameters
     declare_parameter<double>("fov.offset_x", 0.2);
@@ -132,9 +136,11 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     // Update the map with the new point cloud
     RCLCPP_INFO(this->get_logger(), "Starting Map update.");
+    RCLCPP_INFO(this->get_logger(), "Camera position: x=%f, y=%f", camera_position.x(), camera_position.y());
     
     if (map_->getOccupancy(camera_position) == Map::FREE) {
         map_->inputPointCloud(*cloud, cloud->size(), camera_position);
+        RCLCPP_INFO(this->get_logger(), "Point cloud input complete.");
     } else {
         RCLCPP_WARN(this->get_logger(), "Camera position is not in free space, skipping point cloud input.");
         return;
@@ -142,6 +148,8 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     // Inflate obstacles and update the ESDF
     map_->inflateObstacles();
+    RCLCPP_INFO(this->get_logger(), "Obstacles inflated.");
+
     //map_->updateESDF2d();
 
     // Publish the map
@@ -165,6 +173,7 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     vis_utils_->drawDistanceField(marker_distance, *map_, 1.0);
     publisher_distance_->publish(marker_distance);
 
+    map_ready_->store(true, std::memory_order_release);
     RCLCPP_INFO(this->get_logger(), "Map updated and published.");
 }
 

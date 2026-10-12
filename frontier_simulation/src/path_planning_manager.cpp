@@ -1,8 +1,12 @@
 #include "path_planning_manager.hpp"
 
-PathPlanningManager::PathPlanningManager(const std::shared_ptr<Map> & map) : Node("path_planning_manager") {
+PathPlanningManager::PathPlanningManager(
+        const std::shared_ptr<Map> & map,
+        const std::shared_ptr<std::atomic_bool> & map_ready)
+        : Node("path_planning_manager") {
     // Initialize the map
     map_ = map;
+    map_ready_ = map_ready;
     map_builder_.reset(new MapBuilder(map_.get()));
 
     // Initialize parameters
@@ -189,9 +193,7 @@ void PathPlanningManager::initParams() {
 }
 
 void PathPlanningManager::pathPlanningInit() {
-    // Initialization logic for path planning goes here
-
-    // only execute if odometry has been received at least once
+    // The box must be centered on the real position, so wait for the first odometry message.
     if (!odometry_received_)
         return;
 
@@ -207,8 +209,12 @@ void PathPlanningManager::pathPlanningInit() {
         map_builder_->setBox(box_min_pos, box_max_pos, Map::FREE);
         map_->inflateObstacles();
 
+        RCLCPP_INFO(this->get_logger(), "Initialization box set.");
         init_box_discovered_ = true;
     }
+
+    if (!map_ready_->load(std::memory_order_acquire))
+        return;
 
     // Complete one 360-degree rotation before starting the main path planning loop
     if (!init_rotation_started_) {

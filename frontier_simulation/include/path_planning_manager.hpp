@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 #include <memory>
+#include <atomic>
 
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
@@ -35,7 +36,8 @@ class PathPlanningManager : public rclcpp::Node
 {
 public:
     // Takes the map owned by MapUpdater so both nodes operate on the same instance.
-    PathPlanningManager(const std::shared_ptr<Map> & map);
+    PathPlanningManager(const std::shared_ptr<Map> & map,
+                        const std::shared_ptr<std::atomic_bool> & map_ready);
     ~PathPlanningManager();
 
 private:
@@ -107,6 +109,7 @@ private:
 
     // Data (owned by MapUpdater, shared here)
     std::shared_ptr<Map> map_;
+    std::shared_ptr<std::atomic_bool> map_ready_;
     
     // Robot state
     Eigen::Vector2d hippo_position_;

@@ -101,13 +101,17 @@ bool RayCaster::nextId(Eigen::Vector2i& idx) {
         return false;
     }
 
-    // tMaxX stores the t-value at which we cross a cube boundary along the
-    // X axis, and similarly for Y. Therefore, choosing the least tMax
-    // chooses the closest cube boundary.
-    if (tMaxX_ < tMaxY_) {
-        // Update which cube we are now in.
+    // Choose the axis with the closest cell boundary. An axis that has no steps left (or
+    // that has already reached the end cell) must never be advanced, otherwise rounding
+    // errors can make the ray overshoot the end cell and run away indefinitely.
+    bool move_x = tMaxX_ < tMaxY_;
+    if (stepX_ == 0 || x_ == endX_)
+        move_x = false;
+    else if (stepY_ == 0 || y_ == endY_)
+        move_x = true;
+
+    if (move_x) {
         x_ += stepX_;
-        // Adjust tMaxX to the next X-oriented boundary crossing.
         tMaxX_ += tDeltaX_;
     } else {
         y_ += stepY_;

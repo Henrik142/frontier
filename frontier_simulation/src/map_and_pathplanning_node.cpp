@@ -8,7 +8,7 @@ int main(int argc, char ** argv)
   auto map_updater = std::make_shared<MapUpdater>();
   // PathPlanningManager gets the same Map instance so both nodes stay in sync without serialization.
   auto path_planning_manager = std::make_shared<PathPlanningManager>(
-      map_updater->getMap());
+      map_updater->getMap(), map_updater->getMapReadyFlag());
 
   // Single-threaded executor keeps callback execution serialized (no locking needed on the shared map).
   rclcpp::executors::SingleThreadedExecutor executor;

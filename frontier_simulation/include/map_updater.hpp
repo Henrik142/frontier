@@ -16,6 +16,7 @@
 #include <pcl/point_types.h>
 #include <functional>
 #include <memory>
+#include <atomic>
 
 #include "map.hpp"
 #include "raycast.hpp"
@@ -35,6 +36,7 @@ public:
 
     // Shared with the PathPlanningManager so it can query/plan on the same map instance.
     std::shared_ptr<Map> getMap() const;
+    std::shared_ptr<std::atomic_bool> getMapReadyFlag() const;
 
 private:
     void initParams();
@@ -61,4 +63,5 @@ private:
 
     // Data
     std::shared_ptr<Map> map_;
+    std::shared_ptr<std::atomic_bool> map_ready_ = std::make_shared<std::atomic_bool>(false);
 };

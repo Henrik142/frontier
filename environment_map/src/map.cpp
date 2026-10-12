@@ -350,8 +350,10 @@ void Map::inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, con
     // record all voxels that are between the camera and the point as a miss
     caster_->input(pt_w, camera_pos);
     caster_->nextId(idx);
-    while (caster_->nextId(idx))
-      setCacheOccupancy(toAddress(idx), 0);
+    while (caster_->nextId(idx)) {
+      if (isInMap(idx))
+        setCacheOccupancy(toAddress(idx), 0);
+    }
   }
   if (all_points_invalid)
     return;
