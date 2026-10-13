@@ -80,6 +80,10 @@ private:
     Astar::InitAstarParams path_astar_params_, trajectory_astar_params_;
     FrontierFinder::InitFrontierParams frontier_params_;
 
+    // Flag to decide if the global tour should be computed greedily (true) or by
+    // solving the ATSP (false)
+    double global_tour_greedy_;
+
     // Distance threshold for consecutive points for path shortening
     double shorten_path_dist_thresh_;
 
@@ -122,6 +126,9 @@ private:
 
     // Initial yaw of the robot at the start of the initialization rotation
     double hippo_yaw_start_;
+
+    // Time values
+    double dijkstra_max_time_ = 0.0;
 
     // flags for odometry and initialization rotation
     bool odometry_received_ = false;

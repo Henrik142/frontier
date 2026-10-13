@@ -114,6 +114,7 @@ void MapUpdater::initParams() {
 
 void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg, 
         const Odometry::ConstSharedPtr & odometry_msg) {
+    double t1 = this->now().seconds();
     
     // Convert ROS message to PCL point cloud
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -153,6 +154,17 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     // Update the ESDF
     //map_->updateESDF2d();
 
+    map_ready_->store(true, std::memory_order_release);
+
+    double t2 = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds", t2 - t1);
+
+    /*
+    Publish everything
+    */
+
+    t1 = this->now().seconds();
+
     // Publish the map
     publishMap();
 
@@ -166,6 +178,7 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     vis_utils_->drawBox(marker_updated_box, bmin, bmax, *map_);
     publisher_updated_box_->publish(marker_updated_box);
 
+    /*
     // Create and publish the distance field markers
     visualization_msgs::msg::Marker marker_distance;
     marker_distance.header.frame_id = "map";
@@ -173,9 +186,10 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     vis_utils_->drawDistanceField(marker_distance, *map_, 1.0);
     publisher_distance_->publish(marker_distance);
+    */
 
-    map_ready_->store(true, std::memory_order_release);
-    RCLCPP_INFO(this->get_logger(), "Map updated and published.");
+    t2 = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Map publishing completed in %f seconds", t2 - t1);
 }
 
 void MapUpdater::publishMap() {

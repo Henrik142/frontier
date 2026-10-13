@@ -143,6 +143,7 @@ void PathPlanningManager::initParams() {
 
     // Path planning parameters
     declare_parameter<int>("path_planning.update_rate_ms", 200);
+    declare_parameter<bool>("path_planning.global_tour_greedy", true);
     declare_parameter<double>("path_planning.shorten_path_dist_thresh", 3.0);
     declare_parameter<bool>("path_planning.refine_local", true);
     declare_parameter<int>("path_planning.refine_num_clusters", 2);
@@ -160,6 +161,8 @@ void PathPlanningManager::initParams() {
 
     update_rate_ms_ = get_parameter("path_planning.update_rate_ms").as_int();
     RCLCPP_INFO(get_logger(), "path_planning.update_rate_ms=%d", update_rate_ms_);
+    global_tour_greedy_ = get_parameter("path_planning.global_tour_greedy").as_bool();
+    RCLCPP_INFO(get_logger(), "path_planning.global_tour_greedy=%s", global_tour_greedy_ ? "true" : "false");
     shorten_path_dist_thresh_ = get_parameter("path_planning.shorten_path_dist_thresh").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.shorten_path_dist_thresh=%f", shorten_path_dist_thresh_);
     refine_local_ = get_parameter("path_planning.refine_local").as_bool();
@@ -280,6 +283,8 @@ int PathPlanningManager::pathPlanningCallback() {
     if (!path_planning_initialized_)
         return WAITING_FOR_INIT;
 
+    double t1 = this->now().seconds();
+
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
     frontier_finder_->computeClustersToVisit();
@@ -313,6 +318,9 @@ int PathPlanningManager::pathPlanningCallback() {
     std::string result = oss.str();
     RCLCPP_INFO(this->get_logger(), "Costs from hippo_position_: [%s]", result.c_str());
 
+    double t_intermediate = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Frontier update completed in %f seconds", t_intermediate - t1);
+
     // Compute the global tour (i.e. the order in which to visit the clusters)
     std::vector<int> tour;
     findGlobalTour(tour, cost_mat);
@@ -334,12 +342,9 @@ int PathPlanningManager::pathPlanningCallback() {
     frontier_finder_->getPathForTour(hippo_position_, tour, path);
     RCLCPP_INFO(this->get_logger(), "Global path has %zu points.", path.size());
 
-    // Publish the global path
-    visualization_msgs::msg::Marker marker_global_path;
-    marker_global_path.header.frame_id = "map";
-    marker_global_path.header.stamp = this->now();
-    vis_utils_->drawPath(marker_global_path, path);
-    publisher_global_path_->publish(marker_global_path);
+    RCLCPP_INFO(this->get_logger(), "Global path computation completed in %f seconds",
+                this->now().seconds() - t_intermediate);
+    t_intermediate = this->now().seconds();
 
     // Find the target position and yaw for trajectory planning
     Eigen::Vector2d next_pos;
@@ -347,56 +352,80 @@ int PathPlanningManager::pathPlanningCallback() {
 
     // Refine the local tour if the flag is enabled
     if (refine_local_) {
-        std::vector<Eigen::Vector2d> unrefined_pts;
+        // Vector that holds the IDs of the clusters that are considered for refinement
         std::vector<int> refined_ids;
 
         // Number of clusters to consider in the refinement
         int k_num = std::min(refine_num_clusters_, static_cast<int>(tour.size()));
 
-        // Store the single best viewpoint of the first k clusters in the tour
+        // Store the IDs of the first k clusters in the tour.
+        // Additionally, check the distance from the current hippo position and stop
+        // adding clusters if the cluster centroid is too far away.
         for (int i = 0; i < k_num; ++i) {
-            auto tmp = cluster_indexer[tour[i]]->viewpoints_.front().robot_pos_;
-            unrefined_pts.push_back(tmp);
+            if ((cluster_indexer[tour[i]]->average_pos_ - hippo_position_).norm()
+                    > refine_radius_) break;
             refined_ids.push_back(tour[i]);
-            if ((tmp - hippo_position_).norm() > refine_radius_ && refined_ids.size() >= 2) break;
         }
 
-        // Get top N viewpoints for the next K frontiers
-        std::vector<std::vector<Eigen::Vector2d>> n_points;
-        std::vector<std::vector<double>> n_yaws;
-        frontier_finder_->getViewpointsInfo(hippo_position_,
-                                            hippo_yaw_,
-                                            refined_ids,
-                                            refine_num_viewpoints_,
-                                            refine_max_decay_,
-                                            n_points,
-                                            n_yaws);
+        // Check if there are enough clusters for refinement to proceed
+        if (!refined_ids.empty()) {
+            RCLCPP_INFO(this->get_logger(), "Number of clusters in the refinement is %d",
+                static_cast<int>(refined_ids.size()));
 
-        // Calculate the refined positions and yaws
-        std::vector<Eigen::Vector2d> refined_points;
-        std::vector<double> refined_yaws;
-        refineLocalTour(hippo_position_,
-                        hippo_velocity_,
-                        hippo_yaw_,
-                        n_points,
-                        n_yaws,
-                        refined_points,
-                        refined_yaws);
+            // Get top viewpoints for the next K frontiers. These are the viewpoints that
+            // will be considered for refinement.
+            // For the first cluster, all viewpoints above the visibility threshold
+            // are considered (refine_max_decay_).
+            // For all subsequent clusters, additionally to checking the threshold,
+            // the maximum number of viewpoints is also considered (refine_num_viewpoints_).
+            std::vector<std::vector<Eigen::Vector2d>> n_points;
+            std::vector<std::vector<double>> n_yaws;
+            frontier_finder_->getViewpointsInfo(hippo_position_,
+                                                hippo_yaw_,
+                                                refined_ids,
+                                                refine_num_viewpoints_,
+                                                refine_max_decay_,
+                                                n_points,
+                                                n_yaws);
 
-        next_pos = refined_points.front();
-        next_yaw = refined_yaws.front();
+            // Calculate the refined positions and yaws
+            std::vector<Eigen::Vector2d> refined_points;
+            std::vector<double> refined_yaws;
+            refineLocalTour(hippo_position_,
+                            hippo_velocity_,
+                            hippo_yaw_,
+                            n_points,
+                            n_yaws,
+                            refined_points,
+                            refined_yaws);
 
-        // Publish the refined viewpoints
-        visualization_msgs::msg::Marker marker_refined_views;
-        marker_refined_views.header.frame_id = "map";
-        marker_refined_views.header.stamp = this->now();
-        vis_utils_->drawPath(marker_refined_views, refined_points);
-        publisher_refined_views_->publish(marker_refined_views);
+            next_pos = refined_points.front();
+            next_yaw = refined_yaws.front();
+
+            RCLCPP_INFO(this->get_logger(), "Tour refinement completed in %f seconds",
+                this->now().seconds() - t_intermediate);
+
+            // Publish the refined viewpoints
+            visualization_msgs::msg::Marker marker_refined_views;
+            marker_refined_views.header.frame_id = "map";
+            marker_refined_views.header.stamp = this->now();
+            vis_utils_->drawPath(marker_refined_views, refined_points);
+            publisher_refined_views_->publish(marker_refined_views);
+        } else {
+            // If no clusters are available for refinement,
+            // fall back to the top viewpoint of the first cluster
+            next_pos = cluster_indexer[tour.front()]->viewpoints_.front().robot_pos_;
+            next_yaw = cluster_indexer[tour.front()]->viewpoints_.front().yaw_;
+
+            // TODO: Maybe publish empty refined viewpoints marker
+        }
     } else {        
         // Simply pick the top viewpoint of the first cluster in the tour
         next_pos = cluster_indexer[tour.front()]->viewpoints_.front().robot_pos_;
         next_yaw = cluster_indexer[tour.front()]->viewpoints_.front().yaw_;
     }
+
+    t_intermediate = this->now().seconds();
 
     // Plan trajectory to next viewpoint with increasing resolution
     bool trajectory_found = false;
@@ -410,66 +439,17 @@ int PathPlanningManager::pathPlanningCallback() {
         }
     }
 
-    /*
-    // Retrieve the next viewpoint to visit and find a feasible trajectory to it
-    // First, go through all viewpoints of the first cluster in the tour (from best to worst)
-    // and try to find a path. As soon as a feasible trajectory is found, we stop searching further.
-    // If no feasible trajectory is found for any viewpoint in the first cluster, we move on to
-    // the next cluster in the tour. This is repeated until a feasible trajectory is found or all
-    // clusters have been exhausted.
-    for (int next_cluster_id : tour) {
-        for (auto & frontier_cluster : frontier_clusters) {
-            if (frontier_cluster.id_ != next_cluster_id) {
-                continue;
-            }
-
-            for (std::size_t i = 0; i < frontier_cluster.viewpoints_.size(); ++i) {
-                auto & viewpoint = frontier_cluster.viewpoints_[i];
-                next_pos = viewpoint.robot_pos_;
-                next_yaw = viewpoint.yaw_;
-
-                // When considering the best viewpoint:
-                // Skip to the second-best viewpoint if the Hippo is already
-                // sufficiently close to and aligned with the best one
-                if (i == 0 &&
-                    (hippo_position_ - next_pos).norm() < 0.05 && 
-                    std::abs(hippo_yaw_ - next_yaw) < 0.1) {
-                    continue;
-                }
-
-                // Plan trajectory to next viewpoint with increasing resolution
-                auto resolutions = {0.3, 0.2, 0.1};
-                for (auto res : resolutions) {
-                    trajectory_planner_->astar_->reset();
-                    trajectory_planner_->astar_->setResolution(res);
-                    if (trajectory_planner_->astar_->search(hippo_position_, next_pos) == Astar::REACH_END) {
-                        trajectory_found = true;
-                        break;
-                    }
-                }
-
-                if (trajectory_found) {
-                    RCLCPP_INFO(this->get_logger(), "Next viewpoint position: [%f, %f], yaw: [%f]", next_pos.x(), next_pos.y(), next_yaw);
-                    break;
-                }
-            }
-            
-            break;
-            
-        }
-        if (trajectory_found) {
-            break;
-        }
-    }
-    */
-
     if (!trajectory_found) {
-        RCLCPP_WARN(this->get_logger(), "Failed to find path to any viewpoint.");
+        RCLCPP_WARN(this->get_logger(), "Failed to find path to target viewpoint.");
         return FAIL;
     }
 
     std::vector<Eigen::Vector2d> path_next_goal = trajectory_planner_->astar_->getPath();
     shortenPath(path_next_goal);
+
+    double t2 = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Trajectory planning completed in %f seconds", t2 - t_intermediate);
+    RCLCPP_INFO(this->get_logger(), "Path planning completed in %f seconds", t2 - t1);
 
     // TODO: Improve the trajectory planning, e.g., by smoothing the path,
     // ensuring dynamic feasibility, and avoiding obstacles.
@@ -477,6 +457,15 @@ int PathPlanningManager::pathPlanningCallback() {
     /*
     Publish everything
     */
+
+    t1 = this->now().seconds();
+
+    // Publish the global path
+    visualization_msgs::msg::Marker marker_global_path;
+    marker_global_path.header.frame_id = "map";
+    marker_global_path.header.stamp = this->now();
+    vis_utils_->drawPath(marker_global_path, path);
+    publisher_global_path_->publish(marker_global_path);
 
     // Publish the target yaw of the next viewpoint
     std_msgs::msg::Float64 yaw_msg;
@@ -511,41 +500,45 @@ int PathPlanningManager::pathPlanningCallback() {
     vis_utils_->drawPath(marker_path_to_next_goal, path_next_goal);
     publisher_path_to_next_goal_->publish(marker_path_to_next_goal);
 
-    RCLCPP_INFO(this->get_logger(), "Path to next viewpoint published.");
+    t2 = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Pathplanning publishing completed in %f seconds", t2 - t1);
     return SUCCEED;
 }
 
 void PathPlanningManager::findGlobalTour(std::vector<int> & tour,
                                     const Eigen::MatrixXd & cost_mat) {
-    // For now: find "greedy" global tour that passes all clusters
-    // by first going to the cluster with the lowest cost, then going to the
-    // next cluster that has the lowest cost from the first one, and so on.
-    // TODO: Implement solution of Traveling Salesman Problem
-    tour.clear();
-    tour.push_back(0);
-    int num_clusters = cost_mat.cols();
+    if (global_tour_greedy_) {
+        // Find "greedy" global tour that passes all clusters
+        // by first going to the cluster with the lowest cost, then going to the
+        // next cluster that has the lowest cost from the first one, and so on.
+        tour.clear();
+        tour.push_back(0);
+        int num_clusters = cost_mat.cols();
 
-    for (int i = 0; i < num_clusters-1; ++i) {
-        int current_id = tour.back();
-        int next_id = -1;
-        double next_cost = -1.0;
-        for (int j = 0; j < num_clusters; ++j) {
-            if (std::find(tour.begin(), tour.end(), j) == tour.end()) {
-                if (next_cost < 0 || cost_mat(current_id, j) < next_cost) {
-                    next_cost = cost_mat(current_id, j);
-                    next_id = j;
+        for (int i = 0; i < num_clusters-1; ++i) {
+            int current_id = tour.back();
+            int next_id = -1;
+            double next_cost = -1.0;
+            for (int j = 0; j < num_clusters; ++j) {
+                if (std::find(tour.begin(), tour.end(), j) == tour.end()) {
+                    if (next_cost < 0 || cost_mat(current_id, j) < next_cost) {
+                        next_cost = cost_mat(current_id, j);
+                        next_id = j;
+                    }
                 }
             }
+            tour.push_back(next_id);
         }
-        tour.push_back(next_id);
-    }
 
-    // remove the first entry from the tour, as it just refers to the robot's own position
-    tour.erase(tour.begin());
+        // remove the first entry from the tour, as it just refers to the robot's own position
+        tour.erase(tour.begin());
 
-    // Decrement each entry by 1 to account for the removed first entry
-    for (int& x : tour) {
-        x -= 1;
+        // Decrement each entry by 1 to account for the removed first entry
+        for (int& x : tour) {
+            x -= 1;
+        }
+    } else {
+        // TODO: Implement solution of Traveling Salesman Problem
     }
 }
 
@@ -560,42 +553,42 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
     GraphSearch<ViewNode> g_search;
     std::vector<ViewNode::Ptr> last_group, cur_group;
 
-    // Add the current state
+    // Add the current robot state as the root node
     ViewNode::Ptr first(new ViewNode(cur_pos, cur_yaw));
     first->vel_ = cur_vel;
     g_search.addNode(first);
     last_group.push_back(first);
-    //ViewNode::Ptr final_node;
 
-    // Add viewpoints
+    // Add provided viewpoints of each cluster to the graph
+    // Each viewpoint in the first cluster is a child of the current robot node.
+    // Each viewpoint in the second cluster is a child of all viewpoints in the
+    // first cluster, and so on.
     for (int i = 0; i < n_points.size(); ++i) {
-        // Create nodes for viewpoints of one frontier
+        // Create nodes for viewpoints of one frontier cluster
         for (int j = 0; j < n_points[i].size(); ++j) {
             ViewNode::Ptr node(new ViewNode(n_points[i][j], n_yaws[i][j]));
             g_search.addNode(node);
-            // Connect a node to nodes in last group
+            // Connect a node to all nodes in the last group
             for (auto nd : last_group)
                 g_search.addEdge(nd->id_, node->id_);
             cur_group.push_back(node);
-
-            /*
-            // Only keep the first viewpoint of the last local frontier
-            if (i == n_points.size() - 1) {
-                final_node = node;
-                break;
-            }
-            */
         }
         // Store nodes for this group for connecting edges
         last_group = cur_group;
         cur_group.clear();
     }
 
-    // Search optimal sequence
+    // Search optimal sequence in the graph
+    // The optimal sequence is the one that reaches a leaf node (node in the last
+    // cluster) and has the lowest cost.
     std::vector<ViewNode::Ptr> path;
-    // g_search.DijkstraSearch(first->id_, final_node->id_, path);
+    double t1 = this->now().seconds();
     g_search.FullDijkstraSearch(first->id_, path);
-
+    double t2 = this->now().seconds();
+    if (t2-t1 > dijkstra_max_time_) dijkstra_max_time_ = t2-t1;
+    RCLCPP_INFO(this->get_logger(), "Dijkstra search completed in %f seconds (max time: %f seconds)",
+                t2 - t1, dijkstra_max_time_);
+    
     // Return searched sequence
     for (int i = 1; i < path.size(); ++i) {
         refined_pts.push_back(path[i]->pos_);

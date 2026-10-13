@@ -344,7 +344,6 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
         // Scan all frontiers to find one with the same id
         for (auto cluster : clusters_) {
             if (cluster.id_ == id) {
-                // Get several top viewpoints that are far enough
                 std::vector<Eigen::Vector2d> pts;
                 std::vector<double> ys;
                 // Only viewpoints with more visible cells than a certain fraction of the
@@ -352,16 +351,25 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 int visib_thresh = cluster.viewpoints_.front().visib_num_ * max_decay;
 
                 for (auto view : cluster.viewpoints_) {
-                    if (pts.size() >= view_num || view.visib_num_ <= visib_thresh) break;
+                    // Check if the maximum number of viewpoints has already been reached,
+                    // but not for the first cluster. For the first one, all viewpoints
+                    // are considered regardless of the maximum number of viewpoints.
+                    if (id != ids.front() && pts.size() >= view_num) break;
 
-                    // If a viewpoint is too close to the current position and has a similar yaw,
+                    // Check if the viewpoint is below the visibility threshold.
+                    // In that case, stop adding more viewpoints.
+                    if (view.visib_num_ <= visib_thresh) break;
+
+                    // If a viewpoint is very close to the current position and has a similar yaw,
                     // it is considered reached by the robot and skipped
                     double yaw_diff = std::remainder(view.yaw_ - cur_yaw, 2.0 * M_PI);
                     if ((view.pos_ - cur_pos).norm() < min_candidate_dist_ &&
                         std::abs(yaw_diff) < min_candidate_yaw_diff_) continue;
+                    
                     pts.push_back(view.robot_pos_);
                     ys.push_back(view.yaw_);
                 }
+
                 if (pts.empty()) {
                     // All viewpoints are very close, ignore the distance limit
                     for (auto view : cluster.viewpoints_) {
@@ -372,6 +380,8 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 }
                 points.push_back(pts);
                 yaws.push_back(ys);
+
+                continue;
             }
         }
     }

@@ -35,12 +35,13 @@
       min_visib_num: 4
     path_planning:
       update_rate_ms: 200
+      global_tour_greedy: true
       shorten_path_dist_thresh: 3.0
       refine_local: true
-      refine_num_clusters: 4
-      refine_radius: 2.0
-      refine_num_viewpoints: 25
-      refine_max_decay: 0.5
+      refine_num_clusters: 2
+      refine_radius: 1.0
+      refine_num_viewpoints: 15
+      refine_max_decay: 0.3
       vm: 1.0
       yd: 1.0
       w_y: 0.2

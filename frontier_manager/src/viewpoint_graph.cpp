@@ -54,6 +54,7 @@ double ViewNode::searchPath(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2
     }
     */
 
+    // Search path with A* if the straight line connection is not safe
     astar_->reset();
     if (astar_->search(p1, p2) == Astar::REACH_END) {
         path = astar_->getPath();
