@@ -12,6 +12,7 @@ find_package(frontier_manager REQUIRED)
 find_package(frontier_perception REQUIRED)
 find_package(path_searching REQUIRED)
 find_package(path_following REQUIRED)
+find_package(lkh_tsp_solver REQUIRED)
 
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -67,6 +68,7 @@ ament_target_dependencies(frontier_simulation
   frontier_manager
   path_searching
   path_following
+  lkh_tsp_solver
   rclcpp
   std_msgs
   nav_msgs
@@ -150,6 +152,7 @@ ament_export_dependencies(
   frontier_manager
   path_searching
   path_following
+  lkh_tsp_solver
   rclcpp
   std_msgs
   nav_msgs

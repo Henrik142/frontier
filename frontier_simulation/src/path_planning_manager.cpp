@@ -37,6 +37,18 @@ PathPlanningManager::PathPlanningManager(
     ViewNode::caster_.reset(new RayCaster);
     ViewNode::caster_->setParams(resolution, origin);
 
+    // Parameter file for LKH
+    data_dir_ = std::string(std::getenv("HOME")) + "/ros2/src/frontier/lkh_tsp_solver/data";
+    {
+        std::ofstream par_file(data_dir_ + "/single.par");
+        par_file << "PROBLEM_FILE = " << data_dir_ << "/single.tsp\n"
+                << "MOVE_TYPE = 5\n"
+                << "PATCHING_C = 3\n"
+                << "PATCHING_A = 2\n"
+                << "RUNS = 10\n"
+                << "OUTPUT_TOUR_FILE = " << data_dir_ << "/single.txt\n";
+    }
+
     // TF buffer + listener: subscribes to /tf and /tf_static in the background
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -49,7 +61,7 @@ PathPlanningManager::PathPlanningManager(
     publisher_next_viewpoint_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/next_viewpoint", 10);
     publisher_frontiers_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/cells", 10);
     publisher_viewpoints_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/viewpoints", 10);
-    publisher_top_robot_positions_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/top_robot_positions", 10);
+    publisher_cluster_centroids_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/cluster_centroids", 10);
     publisher_fov_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/viewpoints_fov", 10);
     publisher_velocity_ = this->create_publisher<visualization_msgs::msg::Marker>("velocity", 10);
     publisher_string_ = this->create_publisher<std_msgs::msg::String>("frontier/status", 10);
@@ -209,6 +221,10 @@ void PathPlanningManager::initParams() {
 }
 
 void PathPlanningManager::pathPlanningInit() {
+    if (!path_planning_initialized_) {
+        publishEmptyMarkers();
+    }
+
     // The box must be centered on the real position, so wait for the first odometry message.
     if (!odometry_received_)
         return;
@@ -288,18 +304,10 @@ int PathPlanningManager::pathPlanningCallback() {
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
     frontier_finder_->computeClustersToVisit();
-    std::list<FrontierCluster> frontier_clusters = frontier_finder_->getFrontierClusters();
 
-    // Make a cluster_indexer to access the frontier list easier
-    std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
-    for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
-        cluster_indexer.push_back(it);
-
-    // Publish the frontiers
-    publishFrontierStatus(frontier_clusters);
-
-    if (frontier_clusters.empty()) {
+    if (frontier_finder_->getFrontierClusters().empty()) {
         RCLCPP_INFO(this->get_logger(), "No frontier clusters available.");
+        publishEmptyMarkers();
         return NO_FRONTIER;
     }
 
@@ -308,18 +316,33 @@ int PathPlanningManager::pathPlanningCallback() {
     RCLCPP_INFO(this->get_logger(), "Updating frontier cost matrix");
     frontier_finder_->updateFrontierCostMatrix();
     frontier_finder_->getFullCostMatrix(hippo_position_, hippo_velocity_, hippo_yaw_, cost_mat);
+    
+    // Make a cluster_indexer to access the frontier list easier
+    std::list<FrontierCluster> frontier_clusters = frontier_finder_->getFrontierClusters();
+    std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
+    for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
+        cluster_indexer.push_back(it);
+
+    // Publish the frontiers
+    publishFrontierStatus(frontier_clusters);
 
     // Print the cost matrix
-    std::ostringstream oss;
-    for (int i = 0; i < cost_mat.cols(); ++i) {
-        if (i > 0) oss << ",";
-        oss << cost_mat(0, i);
+    RCLCPP_INFO(this->get_logger(), "Printing full cost matrix of dimension: [%zux%zu]",
+                cost_mat.rows(), cost_mat.cols());
+    for (int i = 0; i < cost_mat.rows(); ++i) {
+        std::ostringstream oss;
+        for (int j = 0; j < cost_mat.cols(); ++j) {
+            if (j > 0) oss << ",";
+            oss << cost_mat(i, j);
+        }
+        std::string result = oss.str();
+        RCLCPP_INFO(this->get_logger(), "Row %d: [%s]", i, result.c_str());
     }
-    std::string result = oss.str();
-    RCLCPP_INFO(this->get_logger(), "Costs from hippo_position_: [%s]", result.c_str());
 
     double t_intermediate = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Frontier update completed in %f seconds", t_intermediate - t1);
+    if (t_intermediate - t1 > frontier_max_time_) frontier_max_time_ = t_intermediate - t1;
+    RCLCPP_INFO(this->get_logger(), "Frontier update completed in %f seconds (max time: %f seconds)",
+                t_intermediate - t1, frontier_max_time_);
 
     // Compute the global tour (i.e. the order in which to visit the clusters)
     std::vector<int> tour;
@@ -460,27 +483,7 @@ int PathPlanningManager::pathPlanningCallback() {
 
     t1 = this->now().seconds();
 
-    // Publish the global path
-    visualization_msgs::msg::Marker marker_global_path;
-    marker_global_path.header.frame_id = "map";
-    marker_global_path.header.stamp = this->now();
-    vis_utils_->drawPath(marker_global_path, path);
-    publisher_global_path_->publish(marker_global_path);
-
-    // Publish the target yaw of the next viewpoint
-    std_msgs::msg::Float64 yaw_msg;
-    yaw_msg.data = next_yaw;
-    publisher_yaw_->publish(yaw_msg);
-
-    // Publish the next viewpoint for rviz
-    visualization_msgs::msg::Marker marker_next_viewpoint;
-    marker_next_viewpoint.header.frame_id = "map";
-    marker_next_viewpoint.header.stamp = this->now();
-    vis_utils_->drawNextViewpoint(marker_next_viewpoint, next_pos, next_yaw);
-    publisher_next_viewpoint_->publish(marker_next_viewpoint);
-
     // Publish the path to the next goal
-    // This is what the path follower subscribes to
     nav_msgs::msg::Path path_msg;
     path_msg.header.frame_id = "map";
     path_msg.header.stamp = this->now();
@@ -493,12 +496,13 @@ int PathPlanningManager::pathPlanningCallback() {
     }
     publisher_trajectory_->publish(path_msg);
 
-    // Publish path markers for visualization
-    visualization_msgs::msg::Marker marker_path_to_next_goal;
-    marker_path_to_next_goal.header.frame_id = "map";
-    marker_path_to_next_goal.header.stamp = this->now();
-    vis_utils_->drawPath(marker_path_to_next_goal, path_next_goal);
-    publisher_path_to_next_goal_->publish(marker_path_to_next_goal);
+    // Publish the target yaw of the next viewpoint
+    std_msgs::msg::Float64 yaw_msg;
+    yaw_msg.data = next_yaw;
+    publisher_yaw_->publish(yaw_msg);
+
+    // Publish markers for rviz
+    publishPathplanningStatus(path, path_next_goal, next_pos, next_yaw);
 
     t2 = this->now().seconds();
     RCLCPP_INFO(this->get_logger(), "Pathplanning publishing completed in %f seconds", t2 - t1);
@@ -507,19 +511,24 @@ int PathPlanningManager::pathPlanningCallback() {
 
 void PathPlanningManager::findGlobalTour(std::vector<int> & tour,
                                     const Eigen::MatrixXd & cost_mat) {
-    if (global_tour_greedy_) {
+    tour.clear();
+    const int dimension = cost_mat.rows();
+    
+    if (dimension <= 2) {
+        // Only one cluster available, no need to compute a tour
+        tour.push_back(0);
+        
+    } else if (global_tour_greedy_) {
         // Find "greedy" global tour that passes all clusters
         // by first going to the cluster with the lowest cost, then going to the
         // next cluster that has the lowest cost from the first one, and so on.
-        tour.clear();
         tour.push_back(0);
-        int num_clusters = cost_mat.cols();
 
-        for (int i = 0; i < num_clusters-1; ++i) {
+        for (int i = 0; i < dimension-1; ++i) {
             int current_id = tour.back();
             int next_id = -1;
             double next_cost = -1.0;
-            for (int j = 0; j < num_clusters; ++j) {
+            for (int j = 0; j < dimension; ++j) {
                 if (std::find(tour.begin(), tour.end(), j) == tour.end()) {
                     if (next_cost < 0 || cost_mat(current_id, j) < next_cost) {
                         next_cost = cost_mat(current_id, j);
@@ -538,7 +547,54 @@ void PathPlanningManager::findGlobalTour(std::vector<int> & tour,
             x -= 1;
         }
     } else {
-        // TODO: Implement solution of Traveling Salesman Problem
+        // Solve Asymmetric Traveling Salesman Problem
+        // Problem file in TSPLIB format
+        {
+            std::ofstream prob_file(data_dir_ + "/single.tsp");
+            prob_file << "NAME : single\nTYPE : ATSP\nDIMENSION : " << dimension
+                    << "\nEDGE_WEIGHT_TYPE : EXPLICIT\nEDGE_WEIGHT_FORMAT : FULL_MATRIX\n"
+                        "EDGE_WEIGHT_SECTION\n";
+
+            // LKH needs integer costs
+            const int scale = 100;
+            for (int i = 0; i < dimension; ++i) {
+                for (int j = 0; j < dimension; ++j) {
+                    int int_cost = static_cast<int>(cost_mat(i, j) * scale);
+                    prob_file << int_cost << " ";
+                }
+                prob_file << "\n";
+            }
+            prob_file << "EOF";
+        }
+
+        RCLCPP_INFO(this->get_logger(), "Starting ATSP solution with LKH...");
+        double t1 = this->now().seconds();
+
+        solveTSPLKH((data_dir_ + "/single.par").c_str());
+
+        double t2 = this->now().seconds();
+        if (t2-t1 > tsp_max_time_) tsp_max_time_ = t2-t1;
+        RCLCPP_INFO(this->get_logger(), "ATSP solution completed in %f seconds (max time: %f seconds)",
+                    t2 - t1, tsp_max_time_);
+
+        std::ifstream res_file(data_dir_ + "/single.txt");
+        if (!res_file) {
+            std::cerr << "Could not open result file " << data_dir_ << "/single.txt" << std::endl;
+            return;
+        }
+
+        std::string res;
+        while (std::getline(res_file, res)) {
+            if (res.compare("TOUR_SECTION") == 0) break;
+        }
+
+        while (std::getline(res_file, res)) {
+            int id = std::stoi(res);
+            if (id == 1)  // Ignore the current state
+            continue;
+            if (id == -1) break;
+            tour.push_back(id - 2);  // Idx of solver-2 == Idx of frontier
+        }
     }
 }
 
@@ -672,53 +728,92 @@ void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::Shared
     publisher_velocity_->publish(marker_velocity);
 }
 
-void PathPlanningManager::publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters) {
+void PathPlanningManager::publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters,
+                                                bool empty) {
     // Draw frontiers and viewpoints in RViz
     visualization_msgs::msg::Marker marker_cells;
     visualization_msgs::msg::Marker marker_viewpoints;
-    visualization_msgs::msg::Marker marker_top_robot_positions;
+    visualization_msgs::msg::Marker marker_cluster_centroids;
     visualization_msgs::msg::Marker marker_fov;
     std::list<std::string> frontier_status;
 
     marker_cells.header.frame_id = "map";
     marker_cells.header.stamp = this->now();
     marker_viewpoints.header = marker_cells.header;
-    marker_top_robot_positions.header = marker_cells.header;
+    marker_cluster_centroids.header = marker_cells.header;
     marker_fov.header = marker_cells.header;
 
-    if (frontier_clusters.empty()) {
+    if (empty) {
         marker_cells.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_viewpoints.action = visualization_msgs::msg::Marker::DELETEALL;
-        marker_top_robot_positions.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_cluster_centroids.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_fov.action = visualization_msgs::msg::Marker::DELETEALL;
-        publisher_frontiers_->publish(marker_cells);
-        publisher_viewpoints_->publish(marker_viewpoints);
-        publisher_top_robot_positions_->publish(marker_top_robot_positions);
-        publisher_fov_->publish(marker_fov);
-        return;
-    }
-
-    vis_utils_->drawFrontiers(marker_cells,
+    } else {
+        // Populate the markers
+        vis_utils_->drawFrontiers(marker_cells,
                               marker_viewpoints,
-                              marker_top_robot_positions,
+                              marker_cluster_centroids,
                               marker_fov, 
                               frontier_status,
                               frontier_colors_,
                               frontier_clusters,
                               *map_);
 
+        // Publish info about the frontiers
+        for (const auto & status : frontier_status) {
+            auto message = std_msgs::msg::String();
+            message.data = status;
+            RCLCPP_INFO(this->get_logger(), "Publishing: '%s'", message.data.c_str());
+            publisher_string_->publish(message);
+        }
+    }
+
     publisher_frontiers_->publish(marker_cells);
     publisher_viewpoints_->publish(marker_viewpoints);
-    publisher_top_robot_positions_->publish(marker_top_robot_positions);
+    publisher_cluster_centroids_->publish(marker_cluster_centroids);
     publisher_fov_->publish(marker_fov);
-    
-    // Publish info about the frontiers
-    for (const auto & status : frontier_status) {
-        auto message = std_msgs::msg::String();
-        message.data = status;
-        RCLCPP_INFO(this->get_logger(), "Publishing: '%s'", message.data.c_str());
-        publisher_string_->publish(message);
+}
+
+void PathPlanningManager::publishPathplanningStatus(const std::vector<Eigen::Vector2d>& global_path,
+                                                    const std::vector<Eigen::Vector2d>& local_path,
+                                                    const Eigen::Vector2d& next_pos,
+                                                    const double next_yaw,
+                                                    bool empty) {
+    // Draw the global path, the robot at the next viewpoint, and the local path in RViz
+    visualization_msgs::msg::Marker marker_global_path;
+    visualization_msgs::msg::Marker marker_next_viewpoint;
+    visualization_msgs::msg::Marker marker_path_to_next_goal;
+
+    marker_global_path.header.frame_id = "map";
+    marker_global_path.header.stamp = this->now();
+    marker_next_viewpoint.header = marker_global_path.header;
+    marker_path_to_next_goal.header = marker_global_path.header;
+
+    if (empty) {
+        marker_global_path.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_next_viewpoint.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_path_to_next_goal.action = visualization_msgs::msg::Marker::DELETEALL;
+    } else {
+        vis_utils_->drawPath(marker_global_path, global_path);
+        vis_utils_->drawNextViewpoint(marker_next_viewpoint, next_pos, next_yaw);
+        vis_utils_->drawPath(marker_path_to_next_goal, local_path);
     }
+
+    publisher_global_path_->publish(marker_global_path);
+    publisher_next_viewpoint_->publish(marker_next_viewpoint);
+    publisher_path_to_next_goal_->publish(marker_path_to_next_goal);
+}
+
+void PathPlanningManager::publishEmptyMarkers() {
+    std::list<FrontierCluster> frontier_clusters;
+    std::vector<Eigen::Vector2d> global_path;
+    std::vector<Eigen::Vector2d> local_path;
+    Eigen::Vector2d next_pos;
+    double next_yaw;
+    bool empty = true;
+
+    publishFrontierStatus(frontier_clusters, empty);
+    publishPathplanningStatus(global_path, local_path, next_pos, next_yaw, empty);
 }
 
 double PathPlanningManager::wrapYaw(double yaw) {

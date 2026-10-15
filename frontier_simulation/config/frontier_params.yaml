@@ -35,7 +35,7 @@
       min_visib_num: 4
     path_planning:
       update_rate_ms: 200
-      global_tour_greedy: true
+      global_tour_greedy: false
       shorten_path_dist_thresh: 3.0
       refine_local: true
       refine_num_clusters: 2
@@ -49,7 +49,7 @@
       astar:
         resolution: 0.3
         lambda_heu: 10.0
-        max_search_time: 0.1
+        max_search_time: 0.01
         allocate_num: 100000
     trajectory_planning:
       astar:

@@ -65,6 +65,7 @@ public:
 
 private:
   bool checkLineOfSight(const Eigen::Vector2d& start, const Eigen::Vector2d& end);
+  bool checkLineOfSightInflated(const Eigen::Vector2d& start, const Eigen::Vector2d& end);
   void backtrack(const NodePtr& end_node, const Eigen::Vector2d& end);
   void posToIndex(const Eigen::Vector2d& pt, Eigen::Vector2i& idx);
   double getDiagHeu(const Eigen::Vector2d& x1, const Eigen::Vector2d& x2);
@@ -76,6 +77,7 @@ private:
   void getOrigin(Eigen::Vector2d& origin);
   void getSize(Eigen::Vector2d& size);
   bool isInMap(const Eigen::Vector2d& pos);
+  int getOccupancy(const Eigen::Vector2d& pos);
   int getInflatedOccupancy(const Eigen::Vector2d& pos);
 
   // main data structure

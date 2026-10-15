@@ -100,7 +100,7 @@ private:
     bool haveOverlap(const Eigen::Vector2i& bmin1, const Eigen::Vector2i& bmax1,
                      const Eigen::Vector2i& bmin2, const Eigen::Vector2i& bmax2);
     bool isClusterOutdated(const FrontierCluster& cluster);
-    bool isPositionSafe(const Eigen::Vector2d& pos);
+    void findClosestPosToCentroid(const FrontierCluster& cluster, Eigen::Vector2d& closest_pos);
     void wrapYaw(double& yaw);
 
     // Wrapper of Map class

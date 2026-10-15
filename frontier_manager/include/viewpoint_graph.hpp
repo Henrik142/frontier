@@ -47,6 +47,8 @@ public:
   double costTo(const ViewNode::Ptr& node);
   static double computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, const double& y1, const double& y2,
                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path);
+  static double computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
+                            const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path);
   // Coarse to fine path searching
   static double searchPath(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, std::vector<Eigen::Vector2d>& path);
 

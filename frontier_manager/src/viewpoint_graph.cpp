@@ -66,6 +66,8 @@ double ViewNode::searchPath(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2
     return 1000;
 }
 
+// Cost function including cost of yaw change (for calculating the connection cost between the robot's state
+// and a viewpoint, or between two viewpoints)
 double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, const double& y1, const double& y2,
                              const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path) {
     // Cost of position change
@@ -73,8 +75,8 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
     double pos_cost = ViewNode::searchPath(p1, p2, path) / vm_;
 
     /* Motion consistency cost
-    This is only added for the connection cost between the robot's own viewpoint
-    and any cluster, since when calculating the cost between a pair of clusters,
+    This is only added for the connection cost between the robot's own state
+    and any viewpoint, since when calculating the cost between a pair of viewpoints,
     the velocity is zero.
     It penalizes large changes in flight direction to prevent back-and-forth
     maneuvers in successive planning steps.
@@ -134,4 +136,33 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
 
     // Total cost is the maximum of position cost and yaw cost
     // return std::max(pos_cost, yaw_cost);
+}
+
+
+// Cost function without cost of yaw change (for calculating the cost between two cluster centroids)
+double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
+                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path) {
+    // Cost of position change
+    // Path cost = Path length / maximum velocity
+    double pos_cost = ViewNode::searchPath(p1, p2, path) / vm_;
+
+    /* Motion consistency cost
+    This is only added for the connection cost between the robot's own state
+    and any cluster centroid, since when calculating the cost between a pair of clusters,
+    the velocity is zero.
+    It penalizes large changes in flight direction to prevent back-and-forth
+    maneuvers in successive planning steps.
+    */
+    Eigen::Vector2d delta = p2 - p1;
+    if (v1.norm() > 1e-3 && delta.norm() > 1e-9) {
+        Eigen::Vector2d vdir = v1.normalized();
+        Eigen::Vector2d dir = delta.normalized();
+
+        double cosine = std::clamp(vdir.dot(dir), -1.0, 1.0);
+        double angle = std::acos(cosine);
+
+        pos_cost += w_dir_ * angle;
+    }
+
+    return pos_cost;
 }

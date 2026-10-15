@@ -29,12 +29,14 @@ def generate_launch_description() -> LaunchDescription:
 
     # Single process hosting both the "map_updater" and "path_planning_manager" nodes,
     # so they can share the same Map instance without serialization.
-    node2 = Node(executable='map_and_pathplanning',
-                 package='frontier_simulation',
-                 parameters=[{
-                     'vehicle_name': LaunchConfiguration('vehicle_name')
-                 },
-                             LaunchConfiguration('config_file')])
+    node2 = Node(
+        executable='map_and_pathplanning',
+        package='frontier_simulation',
+        prefix='xterm -e gdb -ex run --args',
+        parameters=[{
+            'vehicle_name': LaunchConfiguration('vehicle_name')
+        },
+                    LaunchConfiguration('config_file')])
 
     node3 = Node(executable='point_cloud_processor',
                  package='frontier_simulation',

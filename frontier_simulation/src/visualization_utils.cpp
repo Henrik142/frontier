@@ -130,7 +130,7 @@ void VisualizationUtils::drawMap(nav_msgs::msg::OccupancyGrid & grid_msg, const 
 
 void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_cells,
         visualization_msgs::msg::Marker & marker_viewpoints,
-        visualization_msgs::msg::Marker & marker_robot_pos,
+        visualization_msgs::msg::Marker & marker_centroids,
         visualization_msgs::msg::Marker & marker_fov,
         std::list<std::string> & frontier_status,
         std::vector<std::array<double, 3>> & frontier_colors,
@@ -158,15 +158,15 @@ void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_
     marker_viewpoints.scale.z = 0.03;
     marker_viewpoints.color.a = 1.0;
 
-    // Markers for the robot positions
-    marker_robot_pos.ns = "top_robot_positions";
-    marker_robot_pos.id = 0;
-    marker_robot_pos.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-    marker_robot_pos.action = visualization_msgs::msg::Marker::ADD;
-    marker_robot_pos.scale.x = 0.05;
-    marker_robot_pos.scale.y = 0.05;
-    marker_robot_pos.scale.z = 0.05;
-    marker_robot_pos.color.a = 1.0;
+    // Markers for the cluster centroids
+    marker_centroids.ns = "cluster_centroids";
+    marker_centroids.id = 0;
+    marker_centroids.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+    marker_centroids.action = visualization_msgs::msg::Marker::ADD;
+    marker_centroids.scale.x = 0.05;
+    marker_centroids.scale.y = 0.05;
+    marker_centroids.scale.z = 0.05;
+    marker_centroids.color.a = 1.0;
 
     // Markers for the field of view
     marker_fov.ns = "viewpoints_fov";
@@ -197,8 +197,24 @@ void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_
         std::string frontier_str = "Frontier cluster " + std::to_string(++i) + ": ";
         frontier_str += std::to_string(cluster.cells_.size()) + " cells";
         frontier_str += " at average position (" + std::to_string(cluster.average_pos_.x()) + ", " + std::to_string(cluster.average_pos_.y()) + ") ";
-        frontier_str += " with " + std::to_string(cluster.viewpoints_.size()) + " viewpoints";
+        frontier_str += " with " + std::to_string(cluster.viewpoints_.size()) + " viewpoints. ";
+        frontier_str += " Number of costs: " + std::to_string(cluster.costs_.size());
+        frontier_str += ". Number of paths: " + std::to_string(cluster.paths_.size());
         frontier_status.push_back(frontier_str);
+
+        // Populate marker for cluster centroid
+        geometry_msgs::msg::Point point_centroid;
+        point_centroid.x = cluster.average_pos_.x();
+        point_centroid.y = cluster.average_pos_.y();
+        point_centroid.z = 0.0;
+        marker_centroids.points.push_back(point_centroid);
+
+        std_msgs::msg::ColorRGBA point_centroid_color;
+        point_centroid_color.r = color[0];
+        point_centroid_color.g = color[1];
+        point_centroid_color.b = color[2];
+        point_centroid_color.a = 1.0;
+        marker_centroids.colors.push_back(point_centroid_color);
 
         // Add cells of this cluster to the marker
         for (const auto& cell : cluster.cells_) {
@@ -234,22 +250,9 @@ void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_
                 point_color.a = 1.0;
                 marker_viewpoints.colors.push_back(point_color);
 
-                // Draw FOV and robot position for top viewpoint
+                // Draw FOV for top viewpoint
                 if (k == 0) {
                     createFOVMarkers(marker_fov, viewpoint.pos_[0], viewpoint.pos_[1], viewpoint.yaw_);
-
-                    geometry_msgs::msg::Point point_robot_pos;
-                    point_robot_pos.x = viewpoint.robot_pos_[0];
-                    point_robot_pos.y = viewpoint.robot_pos_[1];
-                    point_robot_pos.z = 0.0;
-                    marker_robot_pos.points.push_back(point_robot_pos);
-
-                    std_msgs::msg::ColorRGBA point_robot_pos_color;
-                    point_robot_pos_color.r = color[0];
-                    point_robot_pos_color.g = color[1];
-                    point_robot_pos_color.b = color[2];
-                    point_robot_pos_color.a = 1.0;
-                    marker_robot_pos.colors.push_back(point_robot_pos_color);
                 }
             }
         }

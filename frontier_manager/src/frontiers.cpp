@@ -54,7 +54,7 @@ void FrontierFinder::findFrontiers() {
     // Define lambda function for removing outdated clusters
     // resets the frontier_flag_ entry of all cells to 0 and removes the cluster from the list of all clusters
     auto resetFlag = [&](std::list<FrontierCluster>::iterator& iter, std::list<FrontierCluster>& frontiers) {
-        for (auto cell : iter->cells_) {
+        for (const Eigen::Vector2i& cell : iter->cells_) {
             frontier_flag_[toAddress(cell)] = 0;
         }
         iter = frontiers.erase(iter);
@@ -105,10 +105,10 @@ void FrontierFinder::expandFrontier(const Eigen::Vector2i& seed_cell) {
 
     // Search frontier cluster based on region growing
     while (!cell_queue.empty()) {
-        auto cur = cell_queue.front();
+        const Eigen::Vector2i& cur = cell_queue.front();
         cell_queue.pop();
-        auto nbrs = eightNeighbors(cur);
-        for (auto nbr : nbrs) {
+        const std::vector<Eigen::Vector2i>& nbrs = eightNeighbors(cur);
+        for (const Eigen::Vector2i& nbr : nbrs) {
             // Cell has to qualify as a frontier cell and not already be in the cluster
             int adr = toAddress(nbr);
             if (frontier_flag_[adr] == 1 || !(isKnownAndFree(nbr) && isNeighborUnknown(nbr))) {
@@ -144,7 +144,7 @@ void FrontierFinder::splitLargeClusters(std::list<FrontierCluster>& clusters) {
 bool FrontierFinder::splitCluster(const FrontierCluster& cluster, std::list<FrontierCluster>& splits) {
     // Split a cluster into smaller pieces if it is too large
     bool need_split = false;
-    for (const auto& cell : cluster.cells_) {
+    for (const Eigen::Vector2i& cell : cluster.cells_) {
         Eigen::Vector2d cell_pos;
         indexToPos(cell, cell_pos);
         if ((cell_pos - cluster.average_pos_).norm() > cluster_max_radius_) {
@@ -158,7 +158,7 @@ bool FrontierFinder::splitCluster(const FrontierCluster& cluster, std::list<Fron
     // Covariance matrix of cells
     Eigen::Matrix2d cov;
     cov.setZero();
-    for (auto cell : cluster.cells_) {
+    for (const Eigen::Vector2i& cell : cluster.cells_) {
         Eigen::Vector2d cell_pos;
         indexToPos(cell, cell_pos);
         Eigen::Vector2d diff = cell_pos - cluster.average_pos_;
@@ -168,9 +168,9 @@ bool FrontierFinder::splitCluster(const FrontierCluster& cluster, std::list<Fron
 
     // Find eigenvector that corresponds to maximal eigenvalue
     Eigen::EigenSolver<Eigen::Matrix2d> es(cov);
-    auto values = es.eigenvalues().real();
-    auto vectors = es.eigenvectors().real();
-    int max_idx;
+    Eigen::Vector2d values = es.eigenvalues().real();
+    Eigen::Matrix2d vectors = es.eigenvectors().real();
+    int max_idx = 0;
     double max_eigenvalue = -1000000;
     for (int i = 0; i < values.rows(); ++i) {
         if (values[i] > max_eigenvalue) {
@@ -182,7 +182,7 @@ bool FrontierFinder::splitCluster(const FrontierCluster& cluster, std::list<Fron
 
     // Split the cluster into two groups along the first PC
     FrontierCluster ftr1, ftr2;
-    for (auto cell : cluster.cells_) {
+    for (const Eigen::Vector2i& cell : cluster.cells_) {
         Eigen::Vector2d cell_pos;
         indexToPos(cell, cell_pos);
         if ((cell_pos - cluster.average_pos_).dot(first_pc) >= 0)
@@ -253,10 +253,10 @@ void FrontierFinder::sampleViewpoints(FrontierCluster& cluster) {
             if (!(getOccupancy(sample_pos) == Map::FREE)) continue;
 
             // Compute average yaw by considering the direction from the sample position to each frontier cell
-            auto& cells = cluster.cells_;
+            const std::vector<Eigen::Vector2i>& cells = cluster.cells_;
             double avg_yaw = 0.0;
             Eigen::Vector2d mean_dir = Eigen::Vector2d::Zero();
-            for (const auto& cell : cells) {
+            for (const Eigen::Vector2i& cell : cells) {
                 Eigen::Vector2d cell_pos;
                 indexToPos(cell, cell_pos);
 
@@ -308,7 +308,7 @@ int FrontierFinder::countVisibleCells(const Eigen::Vector2d& pos, const double& 
     Eigen::Vector2i idx;
     percep_utils_->setPose(pos, yaw);
 
-    for (const auto& cell : cells) {
+    for (const Eigen::Vector2i& cell : cells) {
         Eigen::Vector2d cell_pos;
         indexToPos(cell, cell_pos);
 
@@ -340,9 +340,9 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                                        std::vector<std::vector<double>>& yaws) {
     points.clear();
     yaws.clear();
-    for (auto id : ids) {
+    for (const int& id : ids) {
         // Scan all frontiers to find one with the same id
-        for (auto cluster : clusters_) {
+        for (const FrontierCluster& cluster : clusters_) {
             if (cluster.id_ == id) {
                 std::vector<Eigen::Vector2d> pts;
                 std::vector<double> ys;
@@ -350,7 +350,7 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 // top viewpoint are considered
                 int visib_thresh = cluster.viewpoints_.front().visib_num_ * max_decay;
 
-                for (auto view : cluster.viewpoints_) {
+                for (const Viewpoint& view : cluster.viewpoints_) {
                     // Check if the maximum number of viewpoints has already been reached,
                     // but not for the first cluster. For the first one, all viewpoints
                     // are considered regardless of the maximum number of viewpoints.
@@ -372,7 +372,7 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
 
                 if (pts.empty()) {
                     // All viewpoints are very close, ignore the distance limit
-                    for (auto view : cluster.viewpoints_) {
+                    for (const Viewpoint& view : cluster.viewpoints_) {
                         if (pts.size() >= view_num || view.visib_num_ <= visib_thresh) break;
                         pts.push_back(view.robot_pos_);
                         ys.push_back(view.yaw_);
@@ -397,7 +397,12 @@ void FrontierFinder::getPathForTour(const Eigen::Vector2d& pos,
 
     // Compute the path from current pos to the first frontier
     std::vector<Eigen::Vector2d> segment;
-    ViewNode::searchPath(pos, cluster_indexer[frontier_ids[0]]->viewpoints_.front().robot_pos_, segment);
+    const auto& first_cluster = *cluster_indexer[frontier_ids[0]];
+    Eigen::Vector2d target_pos = first_cluster.average_pos_;
+    if (getOccupancy(target_pos) != Map::FREE) {
+        findClosestPosToCentroid(first_cluster, target_pos);
+    }
+    ViewNode::searchPath(pos, target_pos, segment);
     path.insert(path.end(), segment.begin(), segment.end());
 
     // Get paths of tour passing all clusters
@@ -422,21 +427,25 @@ void FrontierFinder::getFullCostMatrix(const Eigen::Vector2d& cur_pos,
     
     // Fill block for clusters
     int i = 1, j = 1;
-    for (auto ftr : clusters_) {
-      for (auto cs : ftr.costs_) {
+    for (const FrontierCluster& ftr : clusters_) {
+      for (const double cs : ftr.costs_) {
         mat(i, j++) = cs;
       }
       ++i;
       j = 1;
     }
 
-    // Fill block from current state to clusters
+    // Fill first column (costs from clusters to current state, all zero)
     mat.leftCols<1>().setZero();
-    for (auto ftr : clusters_) {
-      Viewpoint vj = ftr.viewpoints_.front();
+
+    // Fill first row (costs from current state to cluster centroids)
+    for (const FrontierCluster& ftr : clusters_) {
       std::vector<Eigen::Vector2d> path;
-      mat(0, j++) =
-          ViewNode::computeCost(cur_pos, vj.robot_pos_, cur_yaw, vj.yaw_, cur_vel, path);
+      Eigen::Vector2d target_pos = ftr.average_pos_;
+      if (getOccupancy(target_pos) != Map::FREE) {
+        findClosestPosToCentroid(ftr, target_pos);
+      }
+      mat(0, j++) = ViewNode::computeCost(cur_pos, target_pos, cur_vel, path);
     }
 }
 
@@ -464,14 +473,22 @@ void FrontierFinder::updateFrontierCostMatrix() {
         removed_ids_.clear();
     }
 
-    auto updateCost = [](const std::list<FrontierCluster>::iterator& it1, 
+    auto updateCost = [this](const std::list<FrontierCluster>::iterator& it1, 
         const std::list<FrontierCluster>::iterator& it2) {
-        // Search path from old cluster's top viewpoint to new cluster's top viewpoint
-        Viewpoint& vui = it1->viewpoints_.front();
-        Viewpoint& vuj = it2->viewpoints_.front();
+        // Search path from old cluster's centroid to new cluster's centroid
         std::vector<Eigen::Vector2d> path_ij;
+        const auto& cluster_i = *it1;
+        const auto& cluster_j = *it2;
+        Eigen::Vector2d target_pos_i = cluster_i.average_pos_;
+        Eigen::Vector2d target_pos_j = cluster_j.average_pos_;
+        if (this->getOccupancy(target_pos_i) != Map::FREE) {
+            this->findClosestPosToCentroid(cluster_i, target_pos_i);
+        }
+        if (this->getOccupancy(target_pos_j) != Map::FREE) {
+            this->findClosestPosToCentroid(cluster_j, target_pos_j);
+        }
         double cost_ij = ViewNode::computeCost(
-            vui.robot_pos_, vuj.robot_pos_, vui.yaw_, vuj.yaw_, Eigen::Vector2d(0, 0), path_ij);
+            target_pos_i, target_pos_j, Eigen::Vector2d(0, 0), path_ij);
         // Insert item for both old and new clusters
         it1->costs_.push_back(cost_ij);
         it1->paths_.push_back(path_ij);
@@ -513,7 +530,7 @@ std::vector<Eigen::Vector2i> FrontierFinder::fourNeighbors(const Eigen::Vector2i
         Eigen::Vector2i(0, -1), Eigen::Vector2i(0, 1)
     };
 
-    for (const auto& offset : offsets) {
+    for (const Eigen::Vector2i& offset : offsets) {
         addNeighbor(neighbors, cell, offset);
     }
 
@@ -532,7 +549,7 @@ std::vector<Eigen::Vector2i> FrontierFinder::eightNeighbors(const Eigen::Vector2
         Eigen::Vector2i(1, -1), Eigen::Vector2i(1, 1)
     };
 
-    for (const auto& offset : offsets) {
+    for (const Eigen::Vector2i& offset : offsets) {
         addNeighbor(neighbors, cell, offset);
     }
 
@@ -549,7 +566,7 @@ void FrontierFinder::addNeighbor(std::vector<Eigen::Vector2i>& neighbors,
 
 bool FrontierFinder::isNeighborUnknown(const Eigen::Vector2i& cell) {
     std::vector<Eigen::Vector2i> neighbors = fourNeighbors(cell);
-    for (const auto& neighbor : neighbors) {
+    for (const Eigen::Vector2i& neighbor : neighbors) {
         if (getOccupancy(neighbor) == Map::UNKNOWN) return true;
     }
     return false;
@@ -564,7 +581,7 @@ void FrontierFinder::computeClusterInfo(FrontierCluster& cluster) {
     cluster.average_pos_.setZero();
     cluster.box_max_ = cluster.cells_.front();
     cluster.box_min_ = cluster.cells_.front();
-    for (auto cell : cluster.cells_) {
+    for (const Eigen::Vector2i& cell : cluster.cells_) {
         Eigen::Vector2d cell_pos;
         indexToPos(cell, cell_pos);
         cluster.average_pos_ += cell_pos;
@@ -587,12 +604,26 @@ bool FrontierFinder::haveOverlap(const Eigen::Vector2i& bmin1, const Eigen::Vect
 
 bool FrontierFinder::isClusterOutdated(const FrontierCluster& cluster) {
     // Checks if any cell in the cluster is no longer a frontier cell
-    for (const auto& cell : cluster.cells_) {
+    for (const Eigen::Vector2i& cell : cluster.cells_) {
         if (!isKnownAndFree(cell) || !isNeighborUnknown(cell)) {
             return true;
         }
     }
     return false;
+}
+
+void FrontierFinder::findClosestPosToCentroid(const FrontierCluster& cluster, Eigen::Vector2d& closest_pos) {
+    // Find the position of the cell in the cluster which is closest to its centroid
+    double min_dist = std::numeric_limits<double>::max();
+    for (const Eigen::Vector2i& cell : cluster.cells_) {
+        Eigen::Vector2d cell_pos;
+        indexToPos(cell, cell_pos);
+        double dist = (cell_pos - cluster.average_pos_).squaredNorm();
+        if (dist < min_dist) {
+            min_dist = dist;
+            closest_pos = cell_pos;
+        }
+    }
 }
 
 void FrontierFinder::wrapYaw(double& yaw) {

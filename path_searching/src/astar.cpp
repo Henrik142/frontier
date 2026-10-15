@@ -121,11 +121,14 @@ int Astar::search(const Eigen::Vector2d& start_pt, const Eigen::Vector2d& end_pt
                 if (!(getInflatedOccupancy(nbr_pos) == Map::FREE))
                     continue;
                 
-                // Check line of sight, except for the start point
-                if (!(cur_pos == start_pt)) {
-                    bool safe = checkLineOfSight(cur_pos, nbr_pos);
-                    if (!safe) continue;
+                // Check line of sight
+                bool safe = true;
+                if (cur_pos == start_pt) {
+                    safe = checkLineOfSight(cur_pos, nbr_pos);
+                } else {
+                    safe = checkLineOfSightInflated(cur_pos, nbr_pos);
                 }
+                if (!safe) continue;
 
                 // Check not in close set
                 if (close_set_map_.find(nbr_idx) != close_set_map_.end()) continue;
@@ -188,7 +191,22 @@ double Astar::pathLength(const std::vector<Eigen::Vector2d>& path) {
 
 // could be replaced with raycaster
 bool Astar::checkLineOfSight(const Eigen::Vector2d& start, const Eigen::Vector2d& end) {
-    // Check line of sight for safety
+    // Check line of sight for safety (using the un-inflated occupancy grid)
+    Eigen::Vector2d dir = end - start;
+    double len = dir.norm();
+    dir.normalize();
+    double los_step = getMapResolution();
+    for (double l = los_step; l < len; l += los_step) {
+        Eigen::Vector2d ckpt = start + l * dir;
+        if (!(getOccupancy(ckpt) == Map::FREE)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Astar::checkLineOfSightInflated(const Eigen::Vector2d& start, const Eigen::Vector2d& end) {
+    // Check line of sight for safety (using the inflated occupancy grid)
     Eigen::Vector2d dir = end - start;
     double len = dir.norm();
     dir.normalize();
@@ -276,6 +294,9 @@ void Astar::getSize(Eigen::Vector2d& size) {
 
 bool Astar::isInMap(const Eigen::Vector2d& pos) {
     return map_->isInMap(pos);
+}
+int Astar::getOccupancy(const Eigen::Vector2d& pos) {
+    return map_->getOccupancy(pos);
 }
 
 int Astar::getInflatedOccupancy(const Eigen::Vector2d& pos) {

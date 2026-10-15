@@ -11,6 +11,8 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <cstdlib>
+#include <fstream>
 
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
@@ -28,6 +30,7 @@
 #include "astar.hpp"
 #include "dijkstra_search.hpp"
 #include "trajectory_planner.hpp"
+#include "lkh_tsp_solver/lkh_interface.h"
 
 enum EXPL_RESULT { WAITING_FOR_INIT, NO_FRONTIER, NO_TOUR, FAIL, SUCCEED };
 
@@ -54,25 +57,36 @@ private:
                          std::vector<double>& refined_yaws);
     void shortenPath(std::vector<Eigen::Vector2d>& path);
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg);
-    void publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters);
+    void publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters,
+                               bool empty = false);
+    void publishPathplanningStatus(const std::vector<Eigen::Vector2d>& global_path,
+                                   const std::vector<Eigen::Vector2d>& local_path,
+                                   const Eigen::Vector2d& next_pos,
+                                   const double next_yaw,
+                                   bool empty = false);
+    void publishEmptyMarkers();
     double wrapYaw(double yaw);
 
     // Subscribers and publishers
+
+    // Odometry subscription
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_odometry_;
 
+    // Target trajectory and yaw publishers for trajectory generation
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr publisher_trajectory_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_yaw_;
 
+    // Publishers for log output and rviz visualization
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_global_path_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_path_to_next_goal_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_refined_views_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_next_viewpoint_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_frontiers_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_viewpoints_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_top_robot_positions_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_cluster_centroids_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_fov_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_velocity_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_string_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_yaw_;
 
     // Params
     std::string vehicle_name_;
@@ -104,6 +118,9 @@ private:
     // Update rate for the path planning loop (in milliseconds)
     int update_rate_ms_;
 
+    // Parameter file for LKH
+    std::string data_dir_;
+
     // Utils
     std::shared_ptr<VisualizationUtils> vis_utils_;
     rclcpp::TimerBase::SharedPtr path_planning_init_timer_;
@@ -128,7 +145,9 @@ private:
     double hippo_yaw_start_;
 
     // Time values
+    double frontier_max_time_ = 0.0;
     double dijkstra_max_time_ = 0.0;
+    double tsp_max_time_ = 0.0;
 
     // flags for odometry and initialization rotation
     bool odometry_received_ = false;
