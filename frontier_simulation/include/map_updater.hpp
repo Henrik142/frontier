@@ -19,6 +19,8 @@
 #include <atomic>
 
 #include "map.hpp"
+#include "planning_maps.hpp"
+#include "map_builder.hpp"
 #include "raycast.hpp"
 #include "visualization_utils.hpp"
 #include "perception_utils.hpp"
@@ -37,6 +39,8 @@ public:
     // Shared with the PathPlanningManager so it can query/plan on the same map instance.
     std::shared_ptr<Map> getMap() const;
     std::shared_ptr<std::atomic_bool> getMapReadyFlag() const;
+    void getMapParams(Map::InitMapParams& map_params) const;
+    void initPlanningMaps(const std::shared_ptr<PlanningMaps> & planning_maps);
 
 private:
     void initParams();
@@ -58,10 +62,18 @@ private:
     Map::InitMapParams map_params_;
 
     // Utils
+    std::shared_ptr<MapBuilder> map_builder_;
     std::shared_ptr<VisualizationUtils> vis_utils_;
     std::shared_ptr<PerceptionUtils> percep_utils_;
 
     // Data
     std::shared_ptr<Map> map_;
+    std::shared_ptr<PlanningMaps> planning_maps_;
     std::shared_ptr<std::atomic_bool> map_ready_ = std::make_shared<std::atomic_bool>(false);
+
+    // Initialization flags
+    bool init_box_discovered_ = false;
+
+    // Time values
+    double update_max_time_ = 0.0;
 };

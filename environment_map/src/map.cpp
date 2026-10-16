@@ -252,6 +252,12 @@ void Map::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset
   if (reset) md_->reset_updated_box_ = true;
 }
 
+void Map::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
+  // returns the bounding box of the updated area in the map
+  bmin = md_->update_box_min_;
+  bmax = md_->update_box_max_;
+}
+
 void Map::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& inflation_size) const {
   bmin -= inflation_size;
   bmax += inflation_size;
@@ -491,6 +497,10 @@ void Map::inflatePoint(const Eigen::Vector2i& pt, const double inflation_radius,
       }
     }
   }
+}
+
+void Map::setDataFrom(const Map& real) {
+  *md_ = *(real.md_);
 }
 
 void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells, const std::vector<int> updated_occupancies) {

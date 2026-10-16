@@ -32,7 +32,7 @@ def generate_launch_description() -> LaunchDescription:
     node2 = Node(
         executable='map_and_pathplanning',
         package='frontier_simulation',
-        prefix='xterm -e gdb -ex run --args',
+        # prefix='xterm -e gdb -ex run --args',
         parameters=[{
             'vehicle_name': LaunchConfiguration('vehicle_name')
         },

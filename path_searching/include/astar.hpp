@@ -50,11 +50,12 @@ public:
         int allocate_num;
   };
 
-  void init(const InitAstarParams& params, const std::shared_ptr<Map>& map);
+  void init(const InitAstarParams& params, const std::shared_ptr<const Map>& map);
   void reset();
   int search(const Eigen::Vector2d& start_pt, const Eigen::Vector2d& end_pt);
   void setResolution(const double& res);
   static double pathLength(const std::vector<Eigen::Vector2d>& path);
+  void setMap(const std::shared_ptr<const Map>& map);
 
   std::vector<Eigen::Vector2d> getPath();
   std::vector<Eigen::Vector2d> getVisited();
@@ -73,12 +74,13 @@ private:
   double getEuclHeu(const Eigen::Vector2d& x1, const Eigen::Vector2d& x2);
 
   /* Wrappers of Map class */
-  double getMapResolution();
-  void getOrigin(Eigen::Vector2d& origin);
-  void getSize(Eigen::Vector2d& size);
-  bool isInMap(const Eigen::Vector2d& pos);
-  int getOccupancy(const Eigen::Vector2d& pos);
-  int getInflatedOccupancy(const Eigen::Vector2d& pos);
+  double getMapResolution() const;
+  void getOrigin(Eigen::Vector2d& origin) const;
+  void getSize(Eigen::Vector2d& size) const;
+  bool isInMap(const Eigen::Vector2d& pos) const;
+  bool isInMap(const Eigen::Vector2i& idx) const;
+  int getOccupancy(const Eigen::Vector2d& pos) const;
+  int getInflatedOccupancy(const Eigen::Vector2d& pos) const;
 
   // main data structure
   std::vector<NodePtr> path_node_pool_;
@@ -89,7 +91,7 @@ private:
   std::vector<Eigen::Vector2d> path_nodes_;
   double early_terminate_cost_;
 
-  std::shared_ptr<Map> map_;
+  std::shared_ptr<const Map> map_;
 
   // parameter
   int allocate_num_;

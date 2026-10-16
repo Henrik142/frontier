@@ -24,10 +24,10 @@
     frontier:
       update_inflation_size: 0.2
       cluster_max_radius: 0.5
-      candidate_rnum: 2
+      candidate_rnum: 3
       candidate_rmin: 0.2
-      candidate_rmax: 0.3
-      candidate_dphi: 45.0
+      candidate_rmax: 0.35
+      candidate_dphi: 30.0
       candidate_theta: 120.0
       candidate_theta_num: 5
       min_candidate_dist: 0.05

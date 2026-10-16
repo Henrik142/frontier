@@ -5,6 +5,7 @@ MapUpdater::MapUpdater() : Node("map_updater") {
 
     map_.reset(new Map());
     map_->initMap(map_params_);
+    map_builder_.reset(new MapBuilder(map_.get()));
 
     vis_utils_.reset(new VisualizationUtils());
     vis_utils_->initVisUtils(fov_params_);
@@ -38,6 +39,14 @@ std::shared_ptr<Map> MapUpdater::getMap() const {
 
 std::shared_ptr<std::atomic_bool> MapUpdater::getMapReadyFlag() const {
     return map_ready_;
+}
+
+void MapUpdater::getMapParams(Map::InitMapParams& map_params) const {
+    map_params = map_params_;
+}
+
+void MapUpdater::initPlanningMaps(const std::shared_ptr<PlanningMaps> & planning_maps) {
+    planning_maps_ = planning_maps;
 }
 
 void MapUpdater::initParams() {
@@ -115,6 +124,27 @@ void MapUpdater::initParams() {
 void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg, 
         const Odometry::ConstSharedPtr & odometry_msg) {
     double t1 = this->now().seconds();
+
+    Eigen::Vector2d robot_position;
+    double yaw;
+    robot_position << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
+    yaw = tf2::getYaw(odometry_msg->pose.pose.orientation);
+
+    // "discover" a box around the initial position
+    if (!init_box_discovered_) {
+        Eigen::Vector2d box_mid_pos;
+        box_mid_pos.x() = robot_position.x();
+        box_mid_pos.y() = robot_position.y();
+
+        double side_length = 0.5;
+        Eigen::Vector2d box_min_pos = box_mid_pos - 0.5 * Eigen::Vector2d::Ones() * side_length;
+        Eigen::Vector2d box_max_pos = box_mid_pos + 0.5 * Eigen::Vector2d::Ones() * side_length;
+        map_builder_->setBox(box_min_pos, box_max_pos, Map::FREE);
+        // map_->inflateObstacles();
+
+        RCLCPP_INFO(this->get_logger(), "Initialization box set.");
+        init_box_discovered_ = true;
+    }
     
     // Convert ROS message to PCL point cloud
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -127,12 +157,7 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     }
 
     // Get the camera position from the robot pose
-    Eigen::Vector2d robot_position, camera_position;
-    double yaw;
-
-    robot_position << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
-    yaw = tf2::getYaw(odometry_msg->pose.pose.orientation);
-
+    Eigen::Vector2d camera_position;
     percep_utils_->getCameraPosFromRobotPose(camera_position, robot_position, yaw);
 
     // Update the map with the new point cloud
@@ -154,10 +179,14 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     // Update the ESDF
     //map_->updateESDF2d();
 
+    planning_maps_->publish(*map_);
     map_ready_->store(true, std::memory_order_release);
 
     double t2 = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds", t2 - t1);
+    if (t2 - t1 > update_max_time_) {
+        update_max_time_ = t2 - t1;
+    }
+    RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds (max time: %f)", t2 - t1, update_max_time_);
 
     /*
     Publish everything
@@ -167,6 +196,20 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     // Publish the map
     publishMap();
+
+    t2 = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Map publishing completed in %f seconds", t2 - t1);
+}
+
+void MapUpdater::publishMap() {
+    nav_msgs::msg::OccupancyGrid grid_msg;
+    grid_msg.header.stamp = this->now();
+    grid_msg.header.frame_id = "map";
+
+    bool show_inflation = false;
+    vis_utils_->drawMap(grid_msg, *map_, show_inflation);
+
+    publisher_map_->publish(grid_msg);
 
     // Create and publish the updated box markers
     visualization_msgs::msg::Marker marker_updated_box;
@@ -187,17 +230,4 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     vis_utils_->drawDistanceField(marker_distance, *map_, 1.0);
     publisher_distance_->publish(marker_distance);
     */
-
-    t2 = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Map publishing completed in %f seconds", t2 - t1);
-}
-
-void MapUpdater::publishMap() {
-    nav_msgs::msg::OccupancyGrid grid_msg;
-    grid_msg.header.stamp = this->now();
-    grid_msg.header.frame_id = "map";
-
-    vis_utils_->drawMap(grid_msg, *map_, false);
-
-    publisher_map_->publish(grid_msg);
 }

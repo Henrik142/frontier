@@ -10,14 +10,14 @@ public:
     TrajectoryPlanner();
     ~TrajectoryPlanner();
 
-    void initTrajectoryPlanner(const std::shared_ptr<Map> & map,
+    void initTrajectoryPlanner(const std::shared_ptr<const Map> & map,
                       const Astar::InitAstarParams & astar_params);
+    void setMap(const std::shared_ptr<const Map>& map);
 
     // Utils
     std::unique_ptr<Astar> astar_;
 
 private:
-    // Data (owned by MapUpdater, shared here)
-    std::shared_ptr<Map> map_;
-
+    // Data
+    std::shared_ptr<const Map> map_;
 };

@@ -1,13 +1,13 @@
 #include "path_planning_manager.hpp"
 
 PathPlanningManager::PathPlanningManager(
-        const std::shared_ptr<Map> & map,
+        const std::shared_ptr<PlanningMaps> & planning_maps,
         const std::shared_ptr<std::atomic_bool> & map_ready)
         : Node("path_planning_manager") {
     // Initialize the map
-    map_ = map;
+    planning_maps_ = planning_maps;
+    most_recent_map_ = planning_maps_->acquire();
     map_ready_ = map_ready;
-    map_builder_.reset(new MapBuilder(map_.get()));
 
     // Initialize parameters
     initParams();
@@ -23,17 +23,17 @@ PathPlanningManager::PathPlanningManager(
     vis_utils_->initVisUtils(fov_params_);
 
     frontier_finder_ = std::make_shared<FrontierFinder>();
-    frontier_finder_->initFrontierFinder(map_, fov_params_, frontier_params_);
+    frontier_finder_->initFrontierFinder(most_recent_map_, fov_params_, frontier_params_);
 
     trajectory_planner_ = std::make_shared<TrajectoryPlanner>();
-    trajectory_planner_->initTrajectoryPlanner(map_, trajectory_astar_params_);
+    trajectory_planner_->initTrajectoryPlanner(most_recent_map_, trajectory_astar_params_);
 
     ViewNode::astar_.reset(new Astar);
-    ViewNode::astar_->init(path_astar_params_, map_);
-    ViewNode::map_ = map_;
+    ViewNode::astar_->init(path_astar_params_, most_recent_map_);
+    ViewNode::map_ = most_recent_map_;
 
-    double resolution = map_->getResolution();
-    Eigen::Vector2d origin(map_->getOriginX(), map_->getOriginY());
+    double resolution = most_recent_map_->getResolution();
+    Eigen::Vector2d origin(most_recent_map_->getOriginX(), most_recent_map_->getOriginY());
     ViewNode::caster_.reset(new RayCaster);
     ViewNode::caster_->setParams(resolution, origin);
 
@@ -225,27 +225,8 @@ void PathPlanningManager::pathPlanningInit() {
         publishEmptyMarkers();
     }
 
-    // The box must be centered on the real position, so wait for the first odometry message.
-    if (!odometry_received_)
-        return;
-
-    // "discover" a box around the initial position
-    if (!init_box_discovered_) {
-        Eigen::Vector2d box_mid_pos;
-        box_mid_pos.x() = hippo_position_.x();
-        box_mid_pos.y() = hippo_position_.y();
-
-        double side_length = 0.5;
-        Eigen::Vector2d box_min_pos = box_mid_pos - 0.5 * Eigen::Vector2d::Ones() * side_length;
-        Eigen::Vector2d box_max_pos = box_mid_pos + 0.5 * Eigen::Vector2d::Ones() * side_length;
-        map_builder_->setBox(box_min_pos, box_max_pos, Map::FREE);
-        map_->inflateObstacles();
-
-        RCLCPP_INFO(this->get_logger(), "Initialization box set.");
-        init_box_discovered_ = true;
-    }
-
-    if (!map_ready_->load(std::memory_order_acquire))
+    // Wait for the first odometry message and the map initialization
+    if (!odometry_received_ || !map_ready_->load(std::memory_order_acquire))
         return;
 
     // Complete one 360-degree rotation before starting the main path planning loop
@@ -301,6 +282,12 @@ int PathPlanningManager::pathPlanningCallback() {
 
     double t1 = this->now().seconds();
 
+    most_recent_map_ = planning_maps_->acquire();
+    frontier_finder_->setMap(most_recent_map_);
+    ViewNode::map_ = most_recent_map_;
+    ViewNode::astar_->setMap(most_recent_map_);
+    trajectory_planner_->setMap(most_recent_map_);
+
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
     frontier_finder_->computeClustersToVisit();
@@ -310,6 +297,16 @@ int PathPlanningManager::pathPlanningCallback() {
         publishEmptyMarkers();
         return NO_FRONTIER;
     }
+
+    std::vector<int> removed_clusters = frontier_finder_->getRemovedIds();
+    std::string removed_info = "Removed cluster IDs: ";
+    for (int removed_id : removed_clusters) {
+        std::ostringstream oss;
+        oss << removed_id;
+        if (removed_id != removed_clusters.back()) oss << ",";
+        removed_info += oss.str();
+    }
+    RCLCPP_INFO(this->get_logger(), "%s", removed_info.c_str());
 
     // Get cost matrix for current state and clusters
     Eigen::MatrixXd cost_mat;
@@ -327,8 +324,9 @@ int PathPlanningManager::pathPlanningCallback() {
     publishFrontierStatus(frontier_clusters);
 
     // Print the cost matrix
-    RCLCPP_INFO(this->get_logger(), "Printing full cost matrix of dimension: [%zux%zu]",
+    RCLCPP_INFO(this->get_logger(), "Cost matrix is of dimension: [%zux%zu]",
                 cost_mat.rows(), cost_mat.cols());
+    /*
     for (int i = 0; i < cost_mat.rows(); ++i) {
         std::ostringstream oss;
         for (int j = 0; j < cost_mat.cols(); ++j) {
@@ -338,6 +336,7 @@ int PathPlanningManager::pathPlanningCallback() {
         std::string result = oss.str();
         RCLCPP_INFO(this->get_logger(), "Row %d: [%s]", i, result.c_str());
     }
+    */
 
     double t_intermediate = this->now().seconds();
     if (t_intermediate - t1 > frontier_max_time_) frontier_max_time_ = t_intermediate - t1;
@@ -667,7 +666,7 @@ void PathPlanningManager::shortenPath(std::vector<Eigen::Vector2d>& path) {
       ViewNode::caster_->input(short_tour.back(), path[i + 1]);
       Eigen::Vector2i idx;
       while (ViewNode::caster_->nextId(idx)) {
-        if (map_->getInflatedOccupancy(idx) != Map::FREE) {
+        if (most_recent_map_->getInflatedOccupancy(idx) != Map::FREE) {
           short_tour.push_back(path[i]);
           break;
         }
@@ -757,7 +756,7 @@ void PathPlanningManager::publishFrontierStatus(const std::list<FrontierCluster>
                               frontier_status,
                               frontier_colors_,
                               frontier_clusters,
-                              *map_);
+                              *most_recent_map_);
 
         // Publish info about the frontiers
         for (const auto & status : frontier_status) {

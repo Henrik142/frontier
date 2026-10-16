@@ -21,7 +21,7 @@
 #include <Eigen/Eigen>
 
 #include "map.hpp"
-#include "map_builder.hpp"
+#include "planning_maps.hpp"
 #include "raycast.hpp"
 #include "frontiers.hpp"
 #include "viewpoint_graph.hpp"
@@ -39,7 +39,7 @@ class PathPlanningManager : public rclcpp::Node
 {
 public:
     // Takes the map owned by MapUpdater so both nodes operate on the same instance.
-    PathPlanningManager(const std::shared_ptr<Map> & map,
+    PathPlanningManager(const std::shared_ptr<PlanningMaps> & planning_maps,
                         const std::shared_ptr<std::atomic_bool> & map_ready);
     ~PathPlanningManager();
 
@@ -128,12 +128,12 @@ private:
     std::vector<std::array<double, 3>> frontier_colors_;
     std::shared_ptr<FrontierFinder> frontier_finder_;
     std::shared_ptr<TrajectoryPlanner> trajectory_planner_;
-    std::shared_ptr<MapBuilder> map_builder_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-    // Data (owned by MapUpdater, shared here)
-    std::shared_ptr<Map> map_;
+    // Data
+    std::shared_ptr<PlanningMaps> planning_maps_;
+    std::shared_ptr<const Map> most_recent_map_;
     std::shared_ptr<std::atomic_bool> map_ready_;
     
     // Robot state
@@ -151,7 +151,6 @@ private:
 
     // flags for odometry and initialization rotation
     bool odometry_received_ = false;
-    bool init_box_discovered_ = false;
     bool init_rotation_started_ = false;
     bool init_rotation_halfway_ = false;
     bool init_rotation_finished_ = false;

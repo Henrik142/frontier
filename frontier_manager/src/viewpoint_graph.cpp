@@ -7,7 +7,7 @@ double ViewNode::w_y;
 double ViewNode::w_dir_;
 std::shared_ptr<Astar> ViewNode::astar_;
 std::shared_ptr<RayCaster> ViewNode::caster_;
-std::shared_ptr<Map> ViewNode::map_;
+std::shared_ptr<const Map> ViewNode::map_;
 
 // Graph node for viewpoints planning
 ViewNode::ViewNode(const Eigen::Vector2d& p, const double& y) {
@@ -81,6 +81,7 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
     It penalizes large changes in flight direction to prevent back-and-forth
     maneuvers in successive planning steps.
     */
+   /*
     Eigen::Vector2d delta = p2 - p1;
     if (v1.norm() > 1e-3 && delta.norm() > 1e-9) {
         Eigen::Vector2d vdir = v1.normalized();
@@ -91,6 +92,7 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
 
         pos_cost += w_dir_ * angle;
     }
+        */
 
     // Cost of yaw change
     // yaw cost = difference in yaw angles / maximum yaw rate

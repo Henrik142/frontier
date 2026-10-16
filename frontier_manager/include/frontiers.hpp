@@ -59,9 +59,11 @@ public:
         int min_visib_num;
     };
 
-    void initFrontierFinder(const std::shared_ptr<Map>& map, 
+    void initFrontierFinder(const std::shared_ptr<const Map>& map,
         const PerceptionUtils::InitFOVParams& fov_params,
         const InitFrontierParams& frontier_params);
+
+    void setMap(const std::shared_ptr<const Map>& map);
 
     void findFrontiers();
     void computeClustersToVisit();
@@ -82,7 +84,8 @@ public:
                            Eigen::MatrixXd& mat);
     void updateFrontierCostMatrix();
 
-    std::list<FrontierCluster> getFrontierClusters();   
+    std::list<FrontierCluster> getFrontierClusters();
+    std::vector<int> getRemovedIds();
 
 private:
     void expandFrontier(const Eigen::Vector2i& seed_cell);
@@ -104,18 +107,21 @@ private:
     void wrapYaw(double& yaw);
 
     // Wrapper of Map class
-    double getResolution();
-    void getOrigin(Eigen::Vector2d& origin);
-    int toAddress(const Eigen::Vector2i& id);
-    void indexToPos(const Eigen::Vector2i& idx, Eigen::Vector2d& pos);
-    void posToIndex(const Eigen::Vector2d& pos, Eigen::Vector2i& idx);
-    bool isInMap(const Eigen::Vector2i& idx);
-    int getOccupancy(const Eigen::Vector2i& id);
-    int getOccupancy(const Eigen::Vector2d& pos);
-    int getInflatedOccupancy(const Eigen::Vector2d& pos);
-    void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset = false);
-    void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size);
-    void fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax);
+    double getResolution() const;
+    int getVoxelNum() const;
+    void getOrigin(Eigen::Vector2d& origin) const;
+    int toAddress(const Eigen::Vector2i& id) const;
+    void indexToPos(const Eigen::Vector2i& idx, Eigen::Vector2d& pos) const;
+    void posToIndex(const Eigen::Vector2d& pos, Eigen::Vector2i& idx) const;
+    bool isInMap(const Eigen::Vector2i& idx) const;
+    int getOccupancy(const Eigen::Vector2i& id) const;
+    int getOccupancy(const Eigen::Vector2d& pos) const;
+    int getInflatedOccupancy(const Eigen::Vector2d& pos) const;
+    void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
+    void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const;
+    void fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
+
+    // void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset = false);
     
     // Data
     // List of currently active frontier clusters.
@@ -173,7 +179,7 @@ private:
     int min_visib_num_;
     
     // Utils
-    std::shared_ptr<Map> map_;
+    std::shared_ptr<const Map> map_;
     std::shared_ptr<PerceptionUtils> percep_utils_;
     std::unique_ptr<RayCaster> raycaster_;
 

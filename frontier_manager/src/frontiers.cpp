@@ -6,7 +6,7 @@ FrontierFinder::FrontierFinder() {
 FrontierFinder::~FrontierFinder() {
 }
 
-void FrontierFinder::initFrontierFinder(const std::shared_ptr<Map>& map,
+void FrontierFinder::initFrontierFinder(const std::shared_ptr<const Map>& map,
         const PerceptionUtils::InitFOVParams& fov_params, 
         const InitFrontierParams& frontier_params) {
     // Initialize map pointer
@@ -18,7 +18,7 @@ void FrontierFinder::initFrontierFinder(const std::shared_ptr<Map>& map,
     getOrigin(origin);
 
     // initialize frontier_flag_ vector to the size of the map, all set to 0 (not a frontier)
-    int cell_num = map_->getVoxelNum();
+    int cell_num = getVoxelNum();
     frontier_flag_ = std::vector<char>(cell_num, 0);
 
     // initialize raycaster
@@ -43,13 +43,18 @@ void FrontierFinder::initFrontierFinder(const std::shared_ptr<Map>& map,
     min_visib_num_ = frontier_params.min_visib_num;
 }
 
+void FrontierFinder::setMap(const std::shared_ptr<const Map>& map) {
+    map_ = map;
+}
+
 void FrontierFinder::findFrontiers() {
     // Clear the temporary list of frontier clusters before finding new frontiers
     tmp_clusters_.clear();
 
     // Bounding box of updated region
     Eigen::Vector2i update_min, update_max;
-    getUpdatedBox(update_min, update_max, true);
+    // getUpdatedBox(update_min, update_max, true);
+    getUpdatedBox(update_min, update_max);
 
     // Define lambda function for removing outdated clusters
     // resets the frontier_flag_ entry of all cells to 0 and removes the cluster from the list of all clusters
@@ -521,6 +526,10 @@ std::list<FrontierCluster> FrontierFinder::getFrontierClusters() {
     return clusters_;
 }
 
+std::vector<int> FrontierFinder::getRemovedIds() {
+    return removed_ids_;
+}
+
 // returns only the four direct neighbors (up, down, left, right) of a cell
 std::vector<Eigen::Vector2i> FrontierFinder::fourNeighbors(const Eigen::Vector2i& cell) {
     std::vector<Eigen::Vector2i> neighbors;
@@ -633,51 +642,61 @@ void FrontierFinder::wrapYaw(double& yaw) {
 
 
 /* Wrappers of Map class */
-double FrontierFinder::getResolution() {
+double FrontierFinder::getResolution() const {
     return map_->getResolution();
 }
 
-void FrontierFinder::getOrigin(Eigen::Vector2d& origin) {
+int FrontierFinder::getVoxelNum() const {
+    return map_->getVoxelNum();
+}
+
+void FrontierFinder::getOrigin(Eigen::Vector2d& origin) const {
     origin[0] = map_->getOriginX();
     origin[1] = map_->getOriginY();
 }
 
-int FrontierFinder::toAddress(const Eigen::Vector2i& id) {
+int FrontierFinder::toAddress(const Eigen::Vector2i& id) const {
     return map_->toAddress(id);
 }
 
-void FrontierFinder::indexToPos(const Eigen::Vector2i& idx, Eigen::Vector2d& pos) {
+void FrontierFinder::indexToPos(const Eigen::Vector2i& idx, Eigen::Vector2d& pos) const {
     map_->indexToPos(idx, pos);
 }
 
-void FrontierFinder::posToIndex(const Eigen::Vector2d& pos, Eigen::Vector2i& idx) {
+void FrontierFinder::posToIndex(const Eigen::Vector2d& pos, Eigen::Vector2i& idx) const {
     map_->posToIndex(pos, idx);
 }
 
-bool FrontierFinder::isInMap(const Eigen::Vector2i& idx) {
+bool FrontierFinder::isInMap(const Eigen::Vector2i& idx) const {
     return map_->isInMap(idx);
 }
 
-int FrontierFinder::getOccupancy(const Eigen::Vector2i& id) {
+int FrontierFinder::getOccupancy(const Eigen::Vector2i& id) const {
     return map_->getOccupancy(id);
 }
 
-int FrontierFinder::getOccupancy(const Eigen::Vector2d& pos) {
+int FrontierFinder::getOccupancy(const Eigen::Vector2d& pos) const {
     return map_->getOccupancy(pos);
 }
 
-int FrontierFinder::getInflatedOccupancy(const Eigen::Vector2d& pos) {
+int FrontierFinder::getInflatedOccupancy(const Eigen::Vector2d& pos) const {
     return map_->getInflatedOccupancy(pos);
 }
 
+/*
 void FrontierFinder::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset) {
     map_->getUpdatedBox(bmin, bmax, reset);
 }
+*/
 
-void FrontierFinder::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) {
+void FrontierFinder::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
+    map_->getUpdatedBox(bmin, bmax);
+}
+
+void FrontierFinder::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const {
     map_->inflateBox(bmin, bmax, inflation_size);
 }
 
-void FrontierFinder::fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) {
+void FrontierFinder::fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
     map_->fitToMap(bmin, bmax);
 }

@@ -8,9 +8,7 @@ Astar::~Astar() {
     delete path_node_pool_[i];
 }
 
-void Astar::init(const InitAstarParams& params, const std::shared_ptr<Map>& map) {
-    // TODO: make parameters configurable through ROS2 parameters
-
+void Astar::init(const InitAstarParams& params, const std::shared_ptr<const Map>& map) {
     // Spatial grid spacing used by A*
     // Independent of the map’s underlying resolution, but it should
     // generally be equal to or larger than the map resolution.
@@ -51,6 +49,10 @@ void Astar::init(const InitAstarParams& params, const std::shared_ptr<Map>& map)
 void Astar::setResolution(const double& res) {
     resolution_ = res;
     this->inv_resolution_ = 1.0 / resolution_;
+}
+
+void Astar::setMap(const std::shared_ptr<const Map>& map) {
+    this->map_ = map;
 }
 
 int Astar::search(const Eigen::Vector2d& start_pt, const Eigen::Vector2d& end_pt) {
@@ -108,7 +110,7 @@ int Astar::search(const Eigen::Vector2d& start_pt, const Eigen::Vector2d& end_pt
                 Eigen::Vector2i step_index(dx_index, dy_index);
                 Eigen::Vector2i nbr_idx = cur_node->index + step_index;
 
-                if (!map_->isInMap(nbr_idx)) {
+                if (!isInMap(nbr_idx)) {
                     continue;
                 }
 
@@ -278,27 +280,32 @@ void Astar::posToIndex(const Eigen::Vector2d& pt, Eigen::Vector2i& idx) {
 
 /* Wrappers of Map class */
 
-double Astar::getMapResolution() {
+double Astar::getMapResolution() const {
     return map_->getResolution();
 }
 
-void Astar::getOrigin(Eigen::Vector2d& origin) {
+void Astar::getOrigin(Eigen::Vector2d& origin) const {
     origin[0] = map_->getOriginX();
     origin[1] = map_->getOriginY();
 }
 
-void Astar::getSize(Eigen::Vector2d& size) {
+void Astar::getSize(Eigen::Vector2d& size) const {
     size[0] = map_->getSizeX();
     size[1] = map_->getSizeY();
 }
 
-bool Astar::isInMap(const Eigen::Vector2d& pos) {
+bool Astar::isInMap(const Eigen::Vector2d& pos) const {
     return map_->isInMap(pos);
 }
-int Astar::getOccupancy(const Eigen::Vector2d& pos) {
+
+bool Astar::isInMap(const Eigen::Vector2i& idx) const {
+    return map_->isInMap(idx);
+}
+
+int Astar::getOccupancy(const Eigen::Vector2d& pos) const {
     return map_->getOccupancy(pos);
 }
 
-int Astar::getInflatedOccupancy(const Eigen::Vector2d& pos) {
+int Astar::getInflatedOccupancy(const Eigen::Vector2d& pos) const {
     return map_->getInflatedOccupancy(pos);
 }

@@ -51,7 +51,6 @@ void PathFollower::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odo
 
     // Initialize position, velocity, and roll targets
     Eigen::Vector3d target_heading = Eigen::Vector3d::Zero();
-    double target_velocity = velocity_setpoint_;
     double target_roll = roll_setpoint_;
 
     Eigen::Vector3d hippo_position;
@@ -69,10 +68,16 @@ void PathFollower::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odo
     Eigen::Vector3d target_position;
     target_position << current_path_[1].x(), current_path_[1].y(), target_depth;
 
+    // Set the target velocity based on the distance to the final point on the path
+    // (which is the viewpoint position)
     Eigen::Vector3d viewpoint_position;
     viewpoint_position << current_path_.back().x(), current_path_.back().y(), target_depth;
 
-    // Look in the direction of the viewpoint, if sufficiently close to viewpoint
+    double slow_distance = 0.2; // Distance at which to start slowing down
+    double target_velocity = std::min(velocity_setpoint_,
+        velocity_setpoint_ * (viewpoint_position - hippo_position).norm() / slow_distance);
+
+    // If the robot is sufficiently close to the viewpoint, stop and look in its direction
     if ((viewpoint_position - hippo_position).norm() < min_target_dist_) {
         target_position.x() = hippo_position.x() + std::cos(next_yaw_);
         target_position.y() = hippo_position.y() + std::sin(next_yaw_);

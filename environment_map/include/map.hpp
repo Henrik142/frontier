@@ -68,6 +68,7 @@ public:
 
   void getMapBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
   void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset = false);
+  void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
   void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& inflation_size) const;
   void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const;
   void fitToBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& fitMin,
@@ -80,6 +81,8 @@ public:
   void inflateObstacles();
 
   void updateESDF2d();
+
+  void setDataFrom(const Map& real);
   
   void manualUpdate(const std::vector<Eigen::Vector2i> updated_cells,
                     const std::vector<int> updated_occupancies);
