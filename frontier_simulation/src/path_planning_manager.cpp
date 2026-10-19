@@ -6,7 +6,7 @@ PathPlanningManager::PathPlanningManager(
         : Node("path_planning_manager") {
     // Initialize the map
     planning_maps_ = planning_maps;
-    most_recent_map_ = planning_maps_->acquire();
+    most_recent_map_ = planning_maps_->acquire(true);
     map_ready_ = map_ready;
 
     // Initialize parameters
@@ -168,7 +168,8 @@ void PathPlanningManager::initParams() {
     declare_parameter<double>("path_planning.w_dir", 1.0);
     declare_parameter<double>("path_planning.astar.resolution", 0.3);
     declare_parameter<double>("path_planning.astar.lambda_heu", 10.0);
-    declare_parameter<double>("path_planning.astar.max_search_time", 0.1);
+    declare_parameter<double>("path_planning.astar.max_search_time_global", 0.001);
+    declare_parameter<double>("path_planning.astar.max_search_time_local", 0.01);
     declare_parameter<int>("path_planning.astar.allocate_num", 100000);
 
     update_rate_ms_ = get_parameter("path_planning.update_rate_ms").as_int();
@@ -199,8 +200,14 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "path_planning.astar.resolution=%f", path_astar_params_.resolution);
     path_astar_params_.lambda_heu = get_parameter("path_planning.astar.lambda_heu").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.astar.lambda_heu=%f", path_astar_params_.lambda_heu);
-    path_astar_params_.max_search_time = get_parameter("path_planning.astar.max_search_time").as_double();
-    RCLCPP_INFO(get_logger(), "path_planning.astar.max_search_time=%f", path_astar_params_.max_search_time);
+
+    max_search_time_global_ = get_parameter("path_planning.astar.max_search_time_global").as_double();
+    RCLCPP_INFO(get_logger(), "path_planning.astar.max_search_time_global=%f", max_search_time_global_);
+    max_search_time_local_ = get_parameter("path_planning.astar.max_search_time_local").as_double();
+    RCLCPP_INFO(get_logger(), "path_planning.astar.max_search_time_local=%f", max_search_time_local_);
+
+    path_astar_params_.max_search_time = max_search_time_global_;
+
     path_astar_params_.allocate_num = get_parameter("path_planning.astar.allocate_num").as_int();
     RCLCPP_INFO(get_logger(), "path_planning.astar.allocate_num=%d", path_astar_params_.allocate_num);
 
@@ -280,18 +287,23 @@ int PathPlanningManager::pathPlanningCallback() {
     if (!path_planning_initialized_)
         return WAITING_FOR_INIT;
 
+    RCLCPP_INFO(this->get_logger(), "Starting pathplanning...");
+
     double t1 = this->now().seconds();
 
-    most_recent_map_ = planning_maps_->acquire();
+    most_recent_map_ = planning_maps_->acquire(true);
     frontier_finder_->setMap(most_recent_map_);
     ViewNode::map_ = most_recent_map_;
     ViewNode::astar_->setMap(most_recent_map_);
     trajectory_planner_->setMap(most_recent_map_);
 
+    path_astar_params_.max_search_time = max_search_time_global_;
+    ViewNode::astar_->setParams(path_astar_params_);
+
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
     frontier_finder_->computeClustersToVisit();
-
+    
     if (frontier_finder_->getFrontierClusters().empty()) {
         RCLCPP_INFO(this->get_logger(), "No frontier clusters available.");
         publishEmptyMarkers();
@@ -308,12 +320,19 @@ int PathPlanningManager::pathPlanningCallback() {
     }
     RCLCPP_INFO(this->get_logger(), "%s", removed_info.c_str());
 
+    double t_intermediate = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "New frontier clusters computed in %f seconds.",
+        t_intermediate - t1);
+
     // Get cost matrix for current state and clusters
     Eigen::MatrixXd cost_mat;
     RCLCPP_INFO(this->get_logger(), "Updating frontier cost matrix");
     frontier_finder_->updateFrontierCostMatrix();
     frontier_finder_->getFullCostMatrix(hippo_position_, hippo_velocity_, hippo_yaw_, cost_mat);
-    
+
+    RCLCPP_INFO(this->get_logger(), "New cost matrix computed in %f seconds.",
+        this->now().seconds() - t_intermediate);
+
     // Make a cluster_indexer to access the frontier list easier
     std::list<FrontierCluster> frontier_clusters = frontier_finder_->getFrontierClusters();
     std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
@@ -338,7 +357,7 @@ int PathPlanningManager::pathPlanningCallback() {
     }
     */
 
-    double t_intermediate = this->now().seconds();
+    t_intermediate = this->now().seconds();
     if (t_intermediate - t1 > frontier_max_time_) frontier_max_time_ = t_intermediate - t1;
     RCLCPP_INFO(this->get_logger(), "Frontier update completed in %f seconds (max time: %f seconds)",
                 t_intermediate - t1, frontier_max_time_);
@@ -360,6 +379,9 @@ int PathPlanningManager::pathPlanningCallback() {
         return NO_TOUR;
 
     // Get the path connecting the viewpoints in the tour
+    path_astar_params_.max_search_time = max_search_time_local_;
+    ViewNode::astar_->setParams(path_astar_params_);
+
     std::vector<Eigen::Vector2d> path;
     frontier_finder_->getPathForTour(hippo_position_, tour, path);
     RCLCPP_INFO(this->get_logger(), "Global path has %zu points.", path.size());

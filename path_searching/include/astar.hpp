@@ -55,6 +55,7 @@ public:
   int search(const Eigen::Vector2d& start_pt, const Eigen::Vector2d& end_pt);
   void setResolution(const double& res);
   static double pathLength(const std::vector<Eigen::Vector2d>& path);
+  void setParams(const InitAstarParams& params);
   void setMap(const std::shared_ptr<const Map>& map);
 
   std::vector<Eigen::Vector2d> getPath();

@@ -19,10 +19,24 @@ public:
     };
 
     // Planner: snapshot of the latest map, valid for the whole callback.
+    std::shared_ptr<const Map> acquire(bool reset) {
+        std::lock_guard lk(m_);
+        reset_updated_box_ = reset;
+        return slots_[latest_];
+    };
+
     std::shared_ptr<const Map> acquire() const {
         std::lock_guard lk(m_);
         return slots_[latest_];
     };
+
+    // Updater: check if the updated box needs to be reset
+    bool getResetUpdatedBox(bool reset) {
+        std::lock_guard lk(m_);
+        bool current = reset_updated_box_;
+        reset_updated_box_ = reset;
+        return current;
+    }
 
     // Updater (single writer): copy the real map's data into a free slot, then publish it.
     void publish(const Map& real) {
@@ -43,4 +57,5 @@ private:
     std::array<std::shared_ptr<Map>, 3> slots_;
     mutable std::mutex m_;
     int latest_ = 0;
+    bool reset_updated_box_ = true;
 };

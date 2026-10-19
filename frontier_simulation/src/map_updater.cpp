@@ -165,7 +165,8 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     // RCLCPP_INFO(this->get_logger(), "Camera position: x=%f, y=%f", camera_position.x(), camera_position.y());
     
     if (map_->getOccupancy(camera_position) == Map::FREE) {
-        map_->inputPointCloud(*cloud, cloud->size(), camera_position);
+        bool reset_updated_box = planning_maps_->getResetUpdatedBox(false);
+        map_->inputPointCloud(*cloud, cloud->size(), camera_position, reset_updated_box);
         // RCLCPP_INFO(this->get_logger(), "Point cloud input complete.");
     } else {
         RCLCPP_WARN(this->get_logger(), "Camera position is not in free space, skipping point cloud input.");
@@ -188,26 +189,21 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     }
     RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds (max time: %f)", t2 - t1, update_max_time_);
 
-    /*
-    Publish everything
-    */
-
-    t1 = this->now().seconds();
-
     // Publish the map
     publishMap();
-
-    t2 = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Map publishing completed in %f seconds", t2 - t1);
 }
 
 void MapUpdater::publishMap() {
+    double t1 = this->now().seconds();
+
+    std::shared_ptr<const Map> map_snapshot = planning_maps_->acquire();
+
     nav_msgs::msg::OccupancyGrid grid_msg;
     grid_msg.header.stamp = this->now();
     grid_msg.header.frame_id = "map";
 
     bool show_inflation = false;
-    vis_utils_->drawMap(grid_msg, *map_, show_inflation);
+    vis_utils_->drawMap(grid_msg, *map_snapshot, show_inflation);
 
     publisher_map_->publish(grid_msg);
 
@@ -217,8 +213,8 @@ void MapUpdater::publishMap() {
     marker_updated_box.header.stamp = this->now();
 
     Eigen::Vector2i bmin, bmax;
-    map_->getUpdatedBox(bmin, bmax);
-    vis_utils_->drawBox(marker_updated_box, bmin, bmax, *map_);
+    map_snapshot->getUpdatedBox(bmin, bmax);
+    vis_utils_->drawBox(marker_updated_box, bmin, bmax, *map_snapshot);
     publisher_updated_box_->publish(marker_updated_box);
 
     /*
@@ -227,7 +223,10 @@ void MapUpdater::publishMap() {
     marker_distance.header.frame_id = "map";
     marker_distance.header.stamp = this->now();
 
-    vis_utils_->drawDistanceField(marker_distance, *map_, 1.0);
+    vis_utils_->drawDistanceField(marker_distance, *map_snapshot, 1.0);
     publisher_distance_->publish(marker_distance);
     */
+
+    double t2 = this->now().seconds();
+    RCLCPP_INFO(this->get_logger(), "Map publishing completed in %f seconds", t2 - t1);
 }

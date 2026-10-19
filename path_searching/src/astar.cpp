@@ -9,6 +9,31 @@ Astar::~Astar() {
 }
 
 void Astar::init(const InitAstarParams& params, const std::shared_ptr<const Map>& map) {
+    setParams(params);
+    
+    // set the map, get origin and size
+    setMap(map);
+    getOrigin(origin_);
+    getSize(map_size_);
+
+    tie_breaker_ = 1.0 + 1.0 / 1000;
+
+    // Preallocate the pool of Node objects for the search
+    path_node_pool_.resize(allocate_num_);
+    for (int i = 0; i < allocate_num_; i++) {
+        path_node_pool_[i] = new Node;
+    }
+    use_node_num_ = 0;
+    iter_num_ = 0;
+    early_terminate_cost_ = 0.0;
+}
+
+void Astar::setResolution(const double& res) {
+    resolution_ = res;
+    this->inv_resolution_ = 1.0 / resolution_;
+}
+
+void Astar::setParams(const InitAstarParams& params) {
     // Spatial grid spacing used by A*
     // Independent of the map’s underlying resolution, but it should
     // generally be equal to or larger than the map resolution.
@@ -28,27 +53,6 @@ void Astar::init(const InitAstarParams& params, const std::shared_ptr<const Map>
     // Number of Node objects preallocated in the search pool
     // If the pool is exhausted, the search fails
     allocate_num_ = params.allocate_num;
-    
-    /* ---------- map params ---------- */
-    this->map_ = map;    
-    getOrigin(origin_);
-    getSize(map_size_);
-
-    tie_breaker_ = 1.0 + 1.0 / 1000;
-
-    // Preallocate the pool of Node objects for the search
-    path_node_pool_.resize(allocate_num_);
-    for (int i = 0; i < allocate_num_; i++) {
-        path_node_pool_[i] = new Node;
-    }
-    use_node_num_ = 0;
-    iter_num_ = 0;
-    early_terminate_cost_ = 0.0;
-}
-
-void Astar::setResolution(const double& res) {
-    resolution_ = res;
-    this->inv_resolution_ = 1.0 / resolution_;
 }
 
 void Astar::setMap(const std::shared_ptr<const Map>& map) {

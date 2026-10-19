@@ -67,7 +67,7 @@ public:
   void setOccupancy(const Eigen::Vector2i& id, int occ);
 
   void getMapBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
-  void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset = false);
+  void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset);
   void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
   void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& inflation_size) const;
   void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const;
@@ -76,7 +76,7 @@ public:
   void fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
 
   void inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, const int& point_num,
-                       const Eigen::Vector2d& camera_pos);
+                       const Eigen::Vector2d& camera_pos, bool reset_updated_box);
 
   void inflateObstacles();
 

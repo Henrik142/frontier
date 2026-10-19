@@ -284,7 +284,7 @@ void Map::fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
 }
 
 void Map::inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, const int& point_num,
-                          const Eigen::Vector2d& camera_pos)
+                          const Eigen::Vector2d& camera_pos, bool reset_updated_box)
 {
   // takes an XYZ point cloud as input, but ignores z (2D map)
   // the points are expected to be expressed in the map/world coordinate frame
@@ -298,6 +298,7 @@ void Map::inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, con
   // only reset the updated box if the flag is set to true
   // this allows the updated box to accumulate changes over multiple point cloud inputs
   // so that the frontiers don't necessarily have to be recalculated after every single point cloud input
+  md_->reset_updated_box_ = reset_updated_box;
   if (md_->reset_updated_box_) {
     posToIndex(camera_pos, md_->update_box_min_);
     md_->update_box_max_ = md_->update_box_min_;

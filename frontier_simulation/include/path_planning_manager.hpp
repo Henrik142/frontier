@@ -94,6 +94,10 @@ private:
     Astar::InitAstarParams path_astar_params_, trajectory_astar_params_;
     FrontierFinder::InitFrontierParams frontier_params_;
 
+    // Maximum search times for global and local A* searches (in seconds, for each path)
+    double max_search_time_global_;
+    double max_search_time_local_;
+
     // Flag to decide if the global tour should be computed greedily (true) or by
     // solving the ATSP (false)
     double global_tour_greedy_;
