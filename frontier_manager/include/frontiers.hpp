@@ -71,7 +71,7 @@ public:
     void getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                            const double& cur_yaw,
                            const std::vector<int>& ids,
-                           const int& view_num,
+                           const std::vector<int>& view_num,
                            const double& max_decay,
                            std::vector<std::vector<Eigen::Vector2d>>& points,
                            std::vector<std::vector<double>>& yaws);

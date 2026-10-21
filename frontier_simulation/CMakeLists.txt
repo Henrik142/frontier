@@ -13,6 +13,7 @@ find_package(frontier_perception REQUIRED)
 find_package(path_searching REQUIRED)
 find_package(path_following REQUIRED)
 find_package(lkh_tsp_solver REQUIRED)
+find_package(frontier_utils REQUIRED)
 
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -27,9 +28,9 @@ find_package(sensor_msgs REQUIRED)
 
 add_library(frontier_simulation STATIC
   src/hippo_visualization.cpp
-  src/visualization_utils.cpp
   src/map_updater.cpp
   src/path_planning_manager.cpp
+  src/trajectory_planner.cpp
   src/astar_test.cpp
 )
 
@@ -69,6 +70,7 @@ ament_target_dependencies(frontier_simulation
   path_searching
   path_following
   lkh_tsp_solver
+  frontier_utils
   rclcpp
   std_msgs
   nav_msgs
@@ -153,6 +155,7 @@ ament_export_dependencies(
   path_searching
   path_following
   lkh_tsp_solver
+  frontier_utils
   rclcpp
   std_msgs
   nav_msgs

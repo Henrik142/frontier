@@ -339,18 +339,20 @@ int FrontierFinder::countVisibleCells(const Eigen::Vector2d& pos, const double& 
 void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                                        const double& cur_yaw,
                                        const std::vector<int>& ids,
-                                       const int& view_num,
+                                       const std::vector<int>& view_num,
                                        const double& max_decay,
                                        std::vector<std::vector<Eigen::Vector2d>>& points,
                                        std::vector<std::vector<double>>& yaws) {
     points.clear();
     yaws.clear();
+    int idx = 0;
     for (const int& id : ids) {
         // Scan all frontiers to find one with the same id
         for (const FrontierCluster& cluster : clusters_) {
             if (cluster.id_ == id) {
-                std::vector<Eigen::Vector2d> pts;
-                std::vector<double> ys;
+                // Select the viewpoints that should be added to the graph search
+                std::vector<Viewpoint> current_viewpoints;
+
                 // Only viewpoints with more visible cells than a certain fraction of the
                 // top viewpoint are considered
                 int visib_thresh = cluster.viewpoints_.front().visib_num_ * max_decay;
@@ -358,33 +360,72 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 for (const Viewpoint& view : cluster.viewpoints_) {
                     // Check if the maximum number of viewpoints has already been reached,
                     // but not for the first cluster. For the first one, all viewpoints
-                    // are considered regardless of the maximum number of viewpoints.
-                    if (id != ids.front() && pts.size() >= view_num) break;
+                    // are considered for now and there's a separate check below.
+                    if (idx > 0 && current_viewpoints.size() >= view_num[idx]) break;
 
                     // Check if the viewpoint is below the visibility threshold.
-                    // In that case, stop adding more viewpoints.
+                    // In that case, we can stop adding more viewpoints as the viewpoints are
+                    // sorted in descending order of visibility.
                     if (view.visib_num_ <= visib_thresh) break;
 
                     // If a viewpoint is very close to the current position and has a similar yaw,
                     // it is considered reached by the robot and skipped
                     double yaw_diff = std::remainder(view.yaw_ - cur_yaw, 2.0 * M_PI);
-                    if ((view.pos_ - cur_pos).norm() < min_candidate_dist_ &&
+                    if ((view.robot_pos_ - cur_pos).norm() < min_candidate_dist_ &&
                         std::abs(yaw_diff) < min_candidate_yaw_diff_) continue;
-                    
-                    pts.push_back(view.robot_pos_);
-                    ys.push_back(view.yaw_);
+
+                    current_viewpoints.push_back(view);
                 }
 
-                if (pts.empty()) {
-                    // All viewpoints are very close, ignore the distance limit
-                    for (const Viewpoint& view : cluster.viewpoints_) {
-                        if (pts.size() >= view_num || view.visib_num_ <= visib_thresh) break;
-                        pts.push_back(view.robot_pos_);
-                        ys.push_back(view.yaw_);
+                // Separate maximum number of viewpoints check for the first cluster
+                // If the first cluster has too many viewpoints, we clear the current viewpoints and
+                // select the closest ones (which are still above the visibility threshold) instead.
+                if (idx == 0 && current_viewpoints.size() > view_num[idx]) {
+                    current_viewpoints.clear();
+                    std::vector<Viewpoint> sorted_viewpoints = cluster.viewpoints_;
+                    // Sort the viewpoints by distance from the current position, closest first
+                    sort(sorted_viewpoints.begin(), sorted_viewpoints.end(),
+                        [&cur_pos](const Viewpoint& v1, const Viewpoint& v2) { 
+                            return (v1.robot_pos_ - cur_pos).norm() < (v2.robot_pos_ - cur_pos).norm(); });
+
+                    for (const Viewpoint& view : sorted_viewpoints) {
+                        // Check if the maximum number of viewpoints has already been reached.
+                        if (current_viewpoints.size() >= view_num[idx]) break;
+
+                        // Skip if the viewpoint is below the visibility threshold.
+                        if (view.visib_num_ <= visib_thresh) continue;
+
+                        // If a viewpoint is very close to the current position and has a similar yaw,
+                        // it is considered reached by the robot and skipped
+                        double yaw_diff = std::remainder(view.yaw_ - cur_yaw, 2.0 * M_PI);
+                        if ((view.robot_pos_ - cur_pos).norm() < min_candidate_dist_ &&
+                            std::abs(yaw_diff) < min_candidate_yaw_diff_) continue;
+
+                        current_viewpoints.push_back(view);
                     }
                 }
+
+                if (current_viewpoints.empty()) {
+                    // All viewpoints are very close, ignore the distance limit
+                    for (const Viewpoint& view : cluster.viewpoints_) {
+                        if (current_viewpoints.size() >= view_num[idx] || view.visib_num_ <= visib_thresh) break;
+                        current_viewpoints.push_back(view);
+                    }
+                }
+
+                // Get the positions and yaws of the selected viewpoints.
+                std::vector<Eigen::Vector2d> pts;
+                std::vector<double> ys;
+                
+                for (const Viewpoint& view : current_viewpoints) {
+                    pts.push_back(view.robot_pos_);
+                    ys.push_back(view.yaw_);
+                }                
+
                 points.push_back(pts);
                 yaws.push_back(ys);
+
+                ++idx;
 
                 continue;
             }
@@ -450,7 +491,17 @@ void FrontierFinder::getFullCostMatrix(const Eigen::Vector2d& cur_pos,
       if (getOccupancy(target_pos) != Map::FREE) {
         findClosestPosToCentroid(ftr, target_pos);
       }
-      mat(0, j++) = ViewNode::computeCost(cur_pos, target_pos, cur_vel, path);
+      double cost = 1000.0;
+      int attempt = 0;
+      while (attempt < 2) {
+        if (attempt == 1) {
+          target_pos = ftr.viewpoints_.front().robot_pos_;
+        }
+        cost = ViewNode::computeCost(cur_pos, target_pos, cur_vel, path);
+        if (cost < 999.0) break;
+        ++attempt;
+      }
+      mat(0, j++) = cost;
     }
 }
 
@@ -492,8 +543,30 @@ void FrontierFinder::updateFrontierCostMatrix() {
         if (this->getOccupancy(target_pos_j) != Map::FREE) {
             this->findClosestPosToCentroid(cluster_j, target_pos_j);
         }
-        double cost_ij = ViewNode::computeCost(
-            target_pos_i, target_pos_j, Eigen::Vector2d(0, 0), path_ij);
+
+        // Try to search path using the cluster centroids (or closest cells) first.
+        // If no path is found, try using the top viewpoints instead.
+        double cost_ij = 1000.0;
+        int attempt = 0;
+        Eigen::Vector2d tmp_target_pos_i = target_pos_i;
+        Eigen::Vector2d tmp_target_pos_j = target_pos_j;
+        while (attempt < 4) {
+            if (attempt == 1) {
+                target_pos_i = cluster_i.viewpoints_.front().robot_pos_;
+                target_pos_j = tmp_target_pos_j;
+            } else if (attempt == 2) {
+                target_pos_i = tmp_target_pos_i;
+                target_pos_j = cluster_j.viewpoints_.front().robot_pos_;
+            } else if (attempt == 3) {
+                target_pos_i = cluster_i.viewpoints_.front().robot_pos_;
+                target_pos_j = cluster_j.viewpoints_.front().robot_pos_;
+            }
+            cost_ij = ViewNode::computeCost(
+                target_pos_i, target_pos_j, Eigen::Vector2d(0, 0), path_ij);
+            if (cost_ij < 999.0) break;
+            ++attempt;
+        }
+
         // Insert item for both old and new clusters
         it1->costs_.push_back(cost_ij);
         it1->paths_.push_back(path_ij);

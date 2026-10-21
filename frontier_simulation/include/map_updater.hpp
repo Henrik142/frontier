@@ -48,6 +48,10 @@ private:
         const Odometry::ConstSharedPtr & odometry_msg);
     void publishMap();
 
+    rclcpp::CallbackGroup::SharedPtr cb_group_sub_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_pub_;
+    rclcpp::TimerBase::SharedPtr publish_timer_;
+
     // Subscribers and publishers
     message_filters::Subscriber<PointCloud2> subscription_pc_;
     message_filters::Subscriber<Odometry> subscription_odometry_;

@@ -8,6 +8,8 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(hippo_control_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 add_library(path_following STATIC
   src/path_follower.cpp
@@ -25,6 +27,8 @@ ament_target_dependencies(path_following
   geometry_msgs
   nav_msgs
   hippo_control_msgs
+  tf2
+  tf2_geometry_msgs
 )
 
 target_link_libraries(path_following Eigen3::Eigen)
@@ -49,5 +53,7 @@ ament_export_dependencies(
   geometry_msgs
   nav_msgs
   hippo_control_msgs
+  tf2
+  tf2_geometry_msgs
 )
 ament_package()

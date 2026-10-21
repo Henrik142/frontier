@@ -9,6 +9,8 @@
 #include <nav_msgs/msg/path.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <Eigen/Eigen>
+#include <tf2/utils.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 class PathFollower : public rclcpp::Node {
 public:
@@ -36,6 +38,7 @@ private:
     double roll_setpoint_;
     double velocity_setpoint_;
     double min_target_dist_;
+    double slow_dist_;
 
     // Data
     std::vector<Eigen::Vector2d> current_path_;

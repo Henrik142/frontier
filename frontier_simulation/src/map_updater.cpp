@@ -18,14 +18,28 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     publisher_updated_box_ = this->create_publisher<visualization_msgs::msg::Marker>("sensor_updated_box", 10);
     publisher_distance_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/distance", 10);
 
-    subscription_pc_.subscribe(this, "map_pointcloud");
-    subscription_odometry_.subscribe(this, "odometry");
+    // Initialize two mutually exclusive callback groups that enable concurrent callbacks
+    cb_group_sub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_pub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    // Create point cloud and odometry subscriptions
+    rclcpp::SubscriptionOptions sub_options;
+    sub_options.callback_group = cb_group_sub_;
+
+    subscription_pc_.subscribe(this, "map_pointcloud", rmw_qos_profile_default, sub_options);
+    subscription_odometry_.subscribe(this, "odometry", rmw_qos_profile_default, sub_options);
 
     // Create a synced callback that is called when there is a new point cloud and odometry message available
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
         SyncPolicy(10), subscription_pc_, subscription_odometry_);
     sync_->registerCallback(std::bind(&MapUpdater::pointCloudCallback, this,
         std::placeholders::_1, std::placeholders::_2));
+
+    // Create a timer for publishing the map to Rviz
+    publish_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(50),
+        std::bind(&MapUpdater::publishMap, this),
+        cb_group_pub_);
 
     RCLCPP_INFO(this->get_logger(), "Node started");
 }
@@ -180,7 +194,14 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     // Update the ESDF
     //map_->updateESDF2d();
 
-    planning_maps_->publish(*map_);
+    // Store the map data in planning_maps_ so it is available for the pathplanning module
+    // as well as for publishing to Rviz
+    if (planning_maps_->publish(*map_)) {
+        RCLCPP_INFO(this->get_logger(), "Map written to planning maps.");
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Failed to write map to planning maps.");
+        return;
+    }
     map_ready_->store(true, std::memory_order_release);
 
     double t2 = this->now().seconds();
@@ -188,12 +209,15 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
         update_max_time_ = t2 - t1;
     }
     RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds (max time: %f)", t2 - t1, update_max_time_);
-
-    // Publish the map
-    publishMap();
 }
 
 void MapUpdater::publishMap() {
+    // This is purely for visualization in rviz
+
+    if (!planning_maps_ || !map_ready_ || !map_ready_->load(std::memory_order_acquire)) {
+        return;
+    }
+
     double t1 = this->now().seconds();
 
     std::shared_ptr<const Map> map_snapshot = planning_maps_->acquire();

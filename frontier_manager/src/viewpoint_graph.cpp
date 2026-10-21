@@ -63,7 +63,7 @@ double ViewNode::searchPath(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2
 
     // Return very high path length if path cannot be found
     path = { p1, p2 };
-    return 1000;
+    return 1000.0;
 }
 
 // Cost function including cost of yaw change (for calculating the connection cost between the robot's state
@@ -72,7 +72,9 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
                              const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path) {
     // Cost of position change
     // Path cost = Path length / maximum velocity
-    double pos_cost = ViewNode::searchPath(p1, p2, path) / vm_;
+    double pos_cost = ViewNode::searchPath(p1, p2, path);
+    if (pos_cost >= 999.0) return 1000.0;
+    pos_cost = pos_cost / vm_;
 
     /* Motion consistency cost
     This is only added for the connection cost between the robot's own state
@@ -146,7 +148,9 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
                              const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path) {
     // Cost of position change
     // Path cost = Path length / maximum velocity
-    double pos_cost = ViewNode::searchPath(p1, p2, path) / vm_;
+    double pos_cost = ViewNode::searchPath(p1, p2, path);
+    if (pos_cost >= 999.0) return 1000.0;
+    pos_cost = pos_cost / vm_;
 
     /* Motion consistency cost
     This is only added for the connection cost between the robot's own state

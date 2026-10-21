@@ -34,33 +34,36 @@
       min_candidate_yaw_diff: 5.0
       min_visib_num: 4
     path_planning:
-      update_rate_ms: 200
+      update_rate_ms: 100
       global_tour_greedy: false
-      shorten_path_dist_thresh: 3.0
       refine_local: true
       refine_num_clusters: 2
       refine_radius: 1.0
       refine_num_viewpoints: 15
+      refine_num_viewpoints_first: 30
       refine_max_decay: 0.3
-      vm: 1.0
+      vm: 2.0
       yd: 1.0
       w_y: 0.2
-      w_dir: 0.2
+      w_dir: 0.0
       astar:
         resolution: 0.3
         lambda_heu: 10.0
-        max_search_time_global: 0.001
-        max_search_time_local: 0.01
+        max_search_time_global: 0.0005
+        max_search_time_local: 0.001
         allocate_num: 100000
     trajectory_planning:
+      update_rate_ms: 100
+      shorten_path_dist_thresh: 3.0
       astar:
         resolution: 0.1
         lambda_heu: 10.0
         max_search_time: 0.1
         allocate_num: 100000
     path_following:
-      velocity_setpoint: 1.0
+      velocity_setpoint: 2.0
       roll_setpoint: 0.0
       min_target_dist: 0.05
+      slow_dist: 0.1
     velocity_control:
       kp: 0.8

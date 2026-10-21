@@ -25,9 +25,6 @@ PathPlanningManager::PathPlanningManager(
     frontier_finder_ = std::make_shared<FrontierFinder>();
     frontier_finder_->initFrontierFinder(most_recent_map_, fov_params_, frontier_params_);
 
-    trajectory_planner_ = std::make_shared<TrajectoryPlanner>();
-    trajectory_planner_->initTrajectoryPlanner(most_recent_map_, trajectory_astar_params_);
-
     ViewNode::astar_.reset(new Astar);
     ViewNode::astar_->init(path_astar_params_, most_recent_map_);
     ViewNode::map_ = most_recent_map_;
@@ -38,7 +35,10 @@ PathPlanningManager::PathPlanningManager(
     ViewNode::caster_->setParams(resolution, origin);
 
     // Parameter file for LKH
-    data_dir_ = std::string(std::getenv("HOME")) + "/ros2/src/frontier/lkh_tsp_solver/data";
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / ("lkh_" + vehicle_name_);
+    fs::create_directories(dir);
+    data_dir_ = dir.string();
     {
         std::ofstream par_file(data_dir_ + "/single.par");
         par_file << "PROBLEM_FILE = " << data_dir_ << "/single.tsp\n"
@@ -53,10 +53,12 @@ PathPlanningManager::PathPlanningManager(
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
+    // Initialize two mutually exclusive callback groups that enable concurrent callbacks
+    cb_group_path_planning_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_odometry_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
     // Initialize publishers and subscribers
-    publisher_trajectory_ = this->create_publisher<nav_msgs::msg::Path>("frontier/trajectory", 10);
     publisher_global_path_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/global_path", 10);
-    publisher_path_to_next_goal_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/path_to_next_goal", 10);
     publisher_refined_views_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/refined_views", 10);
     publisher_next_viewpoint_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/next_viewpoint", 10);
     publisher_frontiers_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/cells", 10);
@@ -65,12 +67,17 @@ PathPlanningManager::PathPlanningManager(
     publisher_fov_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/viewpoints_fov", 10);
     publisher_velocity_ = this->create_publisher<visualization_msgs::msg::Marker>("velocity", 10);
     publisher_string_ = this->create_publisher<std_msgs::msg::String>("frontier/status", 10);
-    publisher_yaw_ = this->create_publisher<std_msgs::msg::Float64>("frontier/next_yaw", 10);
+    publisher_pos_target_ = this->create_publisher<geometry_msgs::msg::Vector3Stamped>("frontier/next_pos", 10);
+    publisher_yaw_target_ = this->create_publisher<std_msgs::msg::Float64>("frontier/next_yaw", 10);
+
+    rclcpp::SubscriptionOptions sub_options;
+    sub_options.callback_group = cb_group_odometry_;
 
     subscription_odometry_ = this->create_subscription<nav_msgs::msg::Odometry>(
         "odometry",
         rclcpp::SensorDataQoS(),   // sensor data QoS: best-effort, suited for high-rate streams
-        std::bind(&PathPlanningManager::odometryCallback, this, std::placeholders::_1));
+        std::bind(&PathPlanningManager::odometryCallback, this, std::placeholders::_1),
+        sub_options);
 
     // Create timer for the path planning initialization
     path_planning_init_timer_ = this->create_wall_timer(
@@ -80,7 +87,8 @@ PathPlanningManager::PathPlanningManager(
     // Create timer that plans a tour over the frontier clusters at a fixed frequency
     path_planning_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(update_rate_ms_),
-        std::bind(&PathPlanningManager::pathPlanningCallback, this));
+        std::bind(&PathPlanningManager::pathPlanningCallback, this),
+        cb_group_path_planning_);
 
     RCLCPP_INFO(this->get_logger(), "Node started");
 }
@@ -156,11 +164,11 @@ void PathPlanningManager::initParams() {
     // Path planning parameters
     declare_parameter<int>("path_planning.update_rate_ms", 200);
     declare_parameter<bool>("path_planning.global_tour_greedy", true);
-    declare_parameter<double>("path_planning.shorten_path_dist_thresh", 3.0);
     declare_parameter<bool>("path_planning.refine_local", true);
     declare_parameter<int>("path_planning.refine_num_clusters", 2);
     declare_parameter<double>("path_planning.refine_radius", 1.0);
     declare_parameter<int>("path_planning.refine_num_viewpoints", 20);
+    declare_parameter<int>("path_planning.refine_num_viewpoints_first", 30);
     declare_parameter<double>("path_planning.refine_max_decay", 0.5);
     declare_parameter<double>("path_planning.vm", 1.0);
     declare_parameter<double>("path_planning.yd", 0.7);
@@ -176,8 +184,6 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "path_planning.update_rate_ms=%d", update_rate_ms_);
     global_tour_greedy_ = get_parameter("path_planning.global_tour_greedy").as_bool();
     RCLCPP_INFO(get_logger(), "path_planning.global_tour_greedy=%s", global_tour_greedy_ ? "true" : "false");
-    shorten_path_dist_thresh_ = get_parameter("path_planning.shorten_path_dist_thresh").as_double();
-    RCLCPP_INFO(get_logger(), "path_planning.shorten_path_dist_thresh=%f", shorten_path_dist_thresh_);
     refine_local_ = get_parameter("path_planning.refine_local").as_bool();
     RCLCPP_INFO(get_logger(), "path_planning.refine_local=%s", refine_local_ ? "true" : "false");
     refine_num_clusters_ = get_parameter("path_planning.refine_num_clusters").as_int();
@@ -186,6 +192,8 @@ void PathPlanningManager::initParams() {
     RCLCPP_INFO(get_logger(), "path_planning.refine_radius=%f", refine_radius_);
     refine_num_viewpoints_ = get_parameter("path_planning.refine_num_viewpoints").as_int();
     RCLCPP_INFO(get_logger(), "path_planning.refine_num_viewpoints=%d", refine_num_viewpoints_);
+    refine_num_viewpoints_first_ = get_parameter("path_planning.refine_num_viewpoints_first").as_int();
+    RCLCPP_INFO(get_logger(), "path_planning.refine_num_viewpoints_first=%d", refine_num_viewpoints_first_);
     refine_max_decay_ = get_parameter("path_planning.refine_max_decay").as_double();
     RCLCPP_INFO(get_logger(), "path_planning.refine_max_decay=%f", refine_max_decay_);
     vm_ = get_parameter("path_planning.vm").as_double();
@@ -210,21 +218,6 @@ void PathPlanningManager::initParams() {
 
     path_astar_params_.allocate_num = get_parameter("path_planning.astar.allocate_num").as_int();
     RCLCPP_INFO(get_logger(), "path_planning.astar.allocate_num=%d", path_astar_params_.allocate_num);
-
-    // Trajectory planning parameters
-    declare_parameter<double>("trajectory_planning.astar.resolution", 0.1);
-    declare_parameter<double>("trajectory_planning.astar.lambda_heu", 10.0);
-    declare_parameter<double>("trajectory_planning.astar.max_search_time", 0.1);
-    declare_parameter<int>("trajectory_planning.astar.allocate_num", 100000);
-
-    trajectory_astar_params_.resolution = get_parameter("trajectory_planning.astar.resolution").as_double();
-    RCLCPP_INFO(get_logger(), "trajectory_planning.astar.resolution=%f", trajectory_astar_params_.resolution);
-    trajectory_astar_params_.lambda_heu = get_parameter("trajectory_planning.astar.lambda_heu").as_double();
-    RCLCPP_INFO(get_logger(), "trajectory_planning.astar.lambda_heu=%f", trajectory_astar_params_.lambda_heu);
-    trajectory_astar_params_.max_search_time = get_parameter("trajectory_planning.astar.max_search_time").as_double();
-    RCLCPP_INFO(get_logger(), "trajectory_planning.astar.max_search_time=%f", trajectory_astar_params_.max_search_time);
-    trajectory_astar_params_.allocate_num = get_parameter("trajectory_planning.astar.allocate_num").as_int();
-    RCLCPP_INFO(get_logger(), "trajectory_planning.astar.allocate_num=%d", trajectory_astar_params_.allocate_num);
 }
 
 void PathPlanningManager::pathPlanningInit() {
@@ -259,26 +252,22 @@ void PathPlanningManager::pathPlanningInit() {
             init_rotation_finished_ = true;
             path_planning_initialized_ = true;
             RCLCPP_INFO(this->get_logger(), "Finished initial rotation.");
+            path_planning_init_timer_->cancel();
+            path_planning_init_timer_.reset();
             return;
         }
 
-        nav_msgs::msg::Path path_msg;
-        path_msg.header.frame_id = "map";
-        path_msg.header.stamp = this->now();
-
-        geometry_msgs::msg::PoseStamped pose_hippo;
-        pose_hippo.pose.position.x = hippo_position_.x();
-        pose_hippo.pose.position.y = hippo_position_.y();
-        pose_hippo.pose.position.z = 0.0;
-
-        path_msg.poses.push_back(pose_hippo);
-        path_msg.poses.push_back(pose_hippo);
+        geometry_msgs::msg::Vector3Stamped target_pos_msg;
+        target_pos_msg.header.stamp = this->now();
+        target_pos_msg.header.frame_id = "map";
+        target_pos_msg.vector.x = hippo_position_.x();
+        target_pos_msg.vector.y = hippo_position_.y();
+        target_pos_msg.vector.z = 0.0;
+        publisher_pos_target_->publish(target_pos_msg);
 
         std_msgs::msg::Float64 target_yaw_msg;
         target_yaw_msg.data = target_yaw;
-
-        publisher_trajectory_->publish(path_msg);
-        publisher_yaw_->publish(target_yaw_msg);
+        publisher_yaw_target_->publish(target_yaw_msg);
     }
 }
 
@@ -295,7 +284,6 @@ int PathPlanningManager::pathPlanningCallback() {
     frontier_finder_->setMap(most_recent_map_);
     ViewNode::map_ = most_recent_map_;
     ViewNode::astar_->setMap(most_recent_map_);
-    trajectory_planner_->setMap(most_recent_map_);
 
     path_astar_params_.max_search_time = max_search_time_global_;
     ViewNode::astar_->setParams(path_astar_params_);
@@ -395,6 +383,8 @@ int PathPlanningManager::pathPlanningCallback() {
     double next_yaw;
 
     // Refine the local tour if the flag is enabled
+    std::vector<Eigen::Vector2d> refined_points;
+    std::vector<double> refined_yaws;
     if (refine_local_) {
         // Vector that holds the IDs of the clusters that are considered for refinement
         std::vector<int> refined_ids;
@@ -416,6 +406,12 @@ int PathPlanningManager::pathPlanningCallback() {
             RCLCPP_INFO(this->get_logger(), "Number of clusters in the refinement is %d",
                 static_cast<int>(refined_ids.size()));
 
+
+            // Define vector that specifies the maximum number of viewpoints for each cluster in the
+            // refinement
+            std::vector<int> refine_num_viewpoints_vec(refined_ids.size(), refine_num_viewpoints_);
+            refine_num_viewpoints_vec[0] = refine_num_viewpoints_first_;
+
             // Get top viewpoints for the next K frontiers. These are the viewpoints that
             // will be considered for refinement.
             // For the first cluster, all viewpoints above the visibility threshold
@@ -427,14 +423,12 @@ int PathPlanningManager::pathPlanningCallback() {
             frontier_finder_->getViewpointsInfo(hippo_position_,
                                                 hippo_yaw_,
                                                 refined_ids,
-                                                refine_num_viewpoints_,
+                                                refine_num_viewpoints_vec,
                                                 refine_max_decay_,
                                                 n_points,
                                                 n_yaws);
 
             // Calculate the refined positions and yaws
-            std::vector<Eigen::Vector2d> refined_points;
-            std::vector<double> refined_yaws;
             refineLocalTour(hippo_position_,
                             hippo_velocity_,
                             hippo_yaw_,
@@ -448,13 +442,6 @@ int PathPlanningManager::pathPlanningCallback() {
 
             RCLCPP_INFO(this->get_logger(), "Tour refinement completed in %f seconds",
                 this->now().seconds() - t_intermediate);
-
-            // Publish the refined viewpoints
-            visualization_msgs::msg::Marker marker_refined_views;
-            marker_refined_views.header.frame_id = "map";
-            marker_refined_views.header.stamp = this->now();
-            vis_utils_->drawPath(marker_refined_views, refined_points);
-            publisher_refined_views_->publish(marker_refined_views);
         } else {
             // If no clusters are available for refinement,
             // fall back to the top viewpoint of the first cluster
@@ -469,64 +456,34 @@ int PathPlanningManager::pathPlanningCallback() {
         next_yaw = cluster_indexer[tour.front()]->viewpoints_.front().yaw_;
     }
 
-    t_intermediate = this->now().seconds();
-
-    // Plan trajectory to next viewpoint with increasing resolution
-    bool trajectory_found = false;
-    auto resolutions = {0.3, 0.2, 0.1};
-    for (auto res : resolutions) {
-        trajectory_planner_->astar_->reset();
-        trajectory_planner_->astar_->setResolution(res);
-        if (trajectory_planner_->astar_->search(hippo_position_, next_pos) == Astar::REACH_END) {
-            trajectory_found = true;
-            break;
-        }
-    }
-
-    if (!trajectory_found) {
-        RCLCPP_WARN(this->get_logger(), "Failed to find path to target viewpoint.");
-        return FAIL;
-    }
-
-    std::vector<Eigen::Vector2d> path_next_goal = trajectory_planner_->astar_->getPath();
-    shortenPath(path_next_goal);
-
-    double t2 = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Trajectory planning completed in %f seconds", t2 - t_intermediate);
-    RCLCPP_INFO(this->get_logger(), "Path planning completed in %f seconds", t2 - t1);
-
-    // TODO: Improve the trajectory planning, e.g., by smoothing the path,
-    // ensuring dynamic feasibility, and avoiding obstacles.
-
     /*
     Publish everything
     */
 
-    t1 = this->now().seconds();
-
-    // Publish the path to the next goal
-    nav_msgs::msg::Path path_msg;
-    path_msg.header.frame_id = "map";
-    path_msg.header.stamp = this->now();
-    for (const auto & point : path_next_goal) {
-        geometry_msgs::msg::PoseStamped pose;
-        pose.pose.position.x = point.x();
-        pose.pose.position.y = point.y();
-        pose.pose.position.z = 0.0;
-        path_msg.poses.push_back(pose);
-    }
-    publisher_trajectory_->publish(path_msg);
+    // Publish the target position of the next viewpoint
+    geometry_msgs::msg::Vector3Stamped target_pos_msg;
+    target_pos_msg.header.stamp = this->now();
+    target_pos_msg.header.frame_id = "map";
+    target_pos_msg.vector.x = next_pos.x();
+    target_pos_msg.vector.y = next_pos.y();
+    target_pos_msg.vector.z = 0.0;
+    publisher_pos_target_->publish(target_pos_msg);
 
     // Publish the target yaw of the next viewpoint
-    std_msgs::msg::Float64 yaw_msg;
-    yaw_msg.data = next_yaw;
-    publisher_yaw_->publish(yaw_msg);
+    std_msgs::msg::Float64 target_yaw_msg;
+    target_yaw_msg.data = next_yaw;
+    publisher_yaw_target_->publish(target_yaw_msg);
 
-    // Publish markers for rviz
-    publishPathplanningStatus(path, path_next_goal, next_pos, next_yaw);
+    // Publish frontier markers for rviz
+    publishPathplanningStatus(path, next_pos, next_yaw, refined_points);
 
-    t2 = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Pathplanning publishing completed in %f seconds", t2 - t1);
+    double t2 = this->now().seconds();
+    if (t2 - t1 > pathplanning_max_time_) {
+        pathplanning_max_time_ = t2 - t1;
+    }
+    RCLCPP_INFO(this->get_logger(), "Path planning completed in %f seconds (max time: %f seconds)",
+        t2 - t1, pathplanning_max_time_);
+
     return SUCCEED;
 }
 
@@ -673,36 +630,6 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
     }
 }
 
-void PathPlanningManager::shortenPath(std::vector<Eigen::Vector2d>& path) {
-  if (path.empty()) {
-    return;
-  }
-
-  // Shorten the tour, only critical intermediate points are reserved.
-  std::vector<Eigen::Vector2d> short_tour = { path.front() };
-  for (int i = 1; i < path.size() - 1; ++i) {
-    if ((path[i] - short_tour.back()).norm() > shorten_path_dist_thresh_)
-      short_tour.push_back(path[i]);
-    else {
-      // Add waypoints to shorten path only to avoid collision
-      ViewNode::caster_->input(short_tour.back(), path[i + 1]);
-      Eigen::Vector2i idx;
-      while (ViewNode::caster_->nextId(idx)) {
-        if (most_recent_map_->getInflatedOccupancy(idx) != Map::FREE) {
-          short_tour.push_back(path[i]);
-          break;
-        }
-      }
-    }
-  }
-  if ((path.back() - short_tour.back()).norm() > 1e-3) short_tour.push_back(path.back());
-
-  // Ensure at least three points in the path
-  if (short_tour.size() == 2)
-    short_tour.insert(short_tour.begin() + 1, 0.5 * (short_tour[0] + short_tour[1]));
-  path = short_tour;
-}
-
 void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
     // Get position and yaw
     hippo_position_ << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
@@ -796,45 +723,45 @@ void PathPlanningManager::publishFrontierStatus(const std::list<FrontierCluster>
 }
 
 void PathPlanningManager::publishPathplanningStatus(const std::vector<Eigen::Vector2d>& global_path,
-                                                    const std::vector<Eigen::Vector2d>& local_path,
                                                     const Eigen::Vector2d& next_pos,
                                                     const double next_yaw,
+                                                    const std::vector<Eigen::Vector2d>& refined_path,
                                                     bool empty) {
     // Draw the global path, the robot at the next viewpoint, and the local path in RViz
     visualization_msgs::msg::Marker marker_global_path;
     visualization_msgs::msg::Marker marker_next_viewpoint;
-    visualization_msgs::msg::Marker marker_path_to_next_goal;
+    visualization_msgs::msg::Marker marker_refined_views;
 
     marker_global_path.header.frame_id = "map";
     marker_global_path.header.stamp = this->now();
     marker_next_viewpoint.header = marker_global_path.header;
-    marker_path_to_next_goal.header = marker_global_path.header;
+    marker_refined_views.header = marker_global_path.header;
 
     if (empty) {
         marker_global_path.action = visualization_msgs::msg::Marker::DELETEALL;
         marker_next_viewpoint.action = visualization_msgs::msg::Marker::DELETEALL;
-        marker_path_to_next_goal.action = visualization_msgs::msg::Marker::DELETEALL;
+        marker_refined_views.action = visualization_msgs::msg::Marker::DELETEALL;
     } else {
         vis_utils_->drawPath(marker_global_path, global_path);
         vis_utils_->drawNextViewpoint(marker_next_viewpoint, next_pos, next_yaw);
-        vis_utils_->drawPath(marker_path_to_next_goal, local_path);
+        vis_utils_->drawPath(marker_refined_views, refined_path);
     }
 
     publisher_global_path_->publish(marker_global_path);
     publisher_next_viewpoint_->publish(marker_next_viewpoint);
-    publisher_path_to_next_goal_->publish(marker_path_to_next_goal);
+    publisher_refined_views_->publish(marker_refined_views);
 }
 
 void PathPlanningManager::publishEmptyMarkers() {
     std::list<FrontierCluster> frontier_clusters;
     std::vector<Eigen::Vector2d> global_path;
-    std::vector<Eigen::Vector2d> local_path;
     Eigen::Vector2d next_pos;
     double next_yaw;
+    std::vector<Eigen::Vector2d> refined_path;
     bool empty = true;
 
     publishFrontierStatus(frontier_clusters, empty);
-    publishPathplanningStatus(global_path, local_path, next_pos, next_yaw, empty);
+    publishPathplanningStatus(global_path, next_pos, next_yaw, refined_path, empty);
 }
 
 double PathPlanningManager::wrapYaw(double yaw) {

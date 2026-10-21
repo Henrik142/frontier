@@ -33,14 +33,17 @@ void PathFollower::initParams() {
     declare_parameter<double>("path_following.velocity_setpoint", 1.0);
     declare_parameter<double>("path_following.roll_setpoint", 0.0);
     declare_parameter<double>("path_following.min_target_dist", 0.05);
+    declare_parameter<double>("path_following.slow_dist", 0.2);
 
     velocity_setpoint_ = get_parameter("path_following.velocity_setpoint").as_double();
     roll_setpoint_ = get_parameter("path_following.roll_setpoint").as_double();
     min_target_dist_ = get_parameter("path_following.min_target_dist").as_double();
+    slow_dist_ = get_parameter("path_following.slow_dist").as_double();
 
     RCLCPP_INFO(get_logger(), "path_following.velocity_setpoint=%f", velocity_setpoint_);
     RCLCPP_INFO(get_logger(), "path_following.roll_setpoint=%f", roll_setpoint_);
     RCLCPP_INFO(get_logger(), "path_following.min_target_dist=%f", min_target_dist_);
+    RCLCPP_INFO(get_logger(), "path_following.slow_dist=%f", slow_dist_);
 }
 
 void PathFollower::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
@@ -49,51 +52,74 @@ void PathFollower::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odo
         return;
     }
 
-    // Initialize position, velocity, and roll targets
-    Eigen::Vector3d target_heading = Eigen::Vector3d::Zero();
-    double target_roll = roll_setpoint_;
-
+    // Get the hippo position and yaw (in the map frame)
     Eigen::Vector3d hippo_position;
     hippo_position << odometry_msg->pose.pose.position.x, 
                       odometry_msg->pose.pose.position.y,
                       odometry_msg->pose.pose.position.z;
+    double hippo_yaw = tf2::getYaw(odometry_msg->pose.pose.orientation);
+
+    // Get the norm of the velocity
+    /*
+    geometry_msgs::msg::Vector3Stamped velocity_child;
+    velocity_child.header.stamp = odometry_msg->header.stamp;
+    velocity_child.header.frame_id = odometry_msg->child_frame_id;
+    velocity_child.vector = odometry_msg->twist.twist.linear;
+    Eigen::Vector3d hippo_velocity;
+    hippo_velocity << velocity_child.vector.x, velocity_child.vector.y, velocity_child.vector.z;
+    double velocity_magnitude = hippo_velocity.norm();
+    */
+
+    // Initialize position, velocity, and roll targets
+    Eigen::Vector3d target_heading = Eigen::Vector3d::Zero();
+    double target_velocity = velocity_setpoint_;
+    double target_roll = roll_setpoint_;
 
     // Set the target depth to be the same as the hippo's current depth
     // to prevent any pitch motion
     double target_depth = hippo_position.z();
-    
-    // Simple carrot chaser that selects the next waypoint on the path as the target
-    // It is expected that the path has at least two points.
-    // The first point is exptected to be the robot's own position.
-    Eigen::Vector3d target_position;
-    target_position << current_path_[1].x(), current_path_[1].y(), target_depth;
 
-    // Set the target velocity based on the distance to the final point on the path
-    // (which is the viewpoint position)
+    // Get viewpoint position (the final point on the path)
     Eigen::Vector3d viewpoint_position;
     viewpoint_position << current_path_.back().x(), current_path_.back().y(), target_depth;
 
-    double slow_distance = 0.2; // Distance at which to start slowing down
-    double target_velocity = std::min(velocity_setpoint_,
-        velocity_setpoint_ * (viewpoint_position - hippo_position).norm() / slow_distance);
-
-    // If the robot is sufficiently close to the viewpoint, stop and look in its direction
+    // Determine the target position and velocity
+    Eigen::Vector3d target_position;
     if ((viewpoint_position - hippo_position).norm() < min_target_dist_) {
+        // If the robot is sufficiently close to the viewpoint, stop and look in its direction
         target_position.x() = hippo_position.x() + std::cos(next_yaw_);
         target_position.y() = hippo_position.y() + std::sin(next_yaw_);
+
+        target_heading = (target_position - hippo_position).normalized();
+
         target_velocity = 0.0;
-    }
+    } else {
+        // Follow the given path:
+        // Simple carrot chaser that selects the next waypoint on the path as the target
+        // It is expected that the path has at least two points.
+        // The first point is exptected to be the robot's own position.
+        target_position << current_path_[1].x(), current_path_[1].y(), target_depth;
 
-    /*
-    // Jump to next waypoint if the first one is too close
-    } else if ((target_position - hippo_position).norm() < min_target_dist_
-        && current_path_.size() > 2) {
-        target_position.x() = current_path_[2].x();
-        target_position.y() = current_path_[2].y();
-    }
-    */
+        if ((target_position - hippo_position).norm() < min_target_dist_ && current_path_.size() > 2) {
+            target_position.x() = current_path_[2].x();
+            target_position.y() = current_path_[2].y();
+        }
 
-    target_heading = (target_position - hippo_position).normalized();
+        target_heading = (target_position - hippo_position).normalized();
+
+        // Limit the target velocity according to the robot's heading and the target heading
+        double cosine = std::clamp(std::cos(hippo_yaw) * target_heading.x() +
+                                   std::sin(hippo_yaw) * target_heading.y(), -1.0, 1.0);
+        if (cosine > 0.0) {
+            target_velocity *= cosine;
+        } else {
+            target_velocity = 0.0;
+        }
+        
+        // Limit the target velocity when the robot is approaching the viewpoint
+        target_velocity = std::min(target_velocity,
+            target_velocity * (viewpoint_position - hippo_position).norm() / slow_dist_);
+    }
 
     // Publish heading, velocity, and roll targets for the controller
 

@@ -4,15 +4,16 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <sstream>
 #include <string>
 #include <memory>
 #include <atomic>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
+#include <unistd.h>
 
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
@@ -29,7 +30,6 @@
 #include "perception_utils.hpp"
 #include "astar.hpp"
 #include "dijkstra_search.hpp"
-#include "trajectory_planner.hpp"
 #include "lkh_tsp_solver/lkh_interface.h"
 
 enum EXPL_RESULT { WAITING_FOR_INIT, NO_FRONTIER, NO_TOUR, FAIL, SUCCEED };
@@ -55,17 +55,24 @@ private:
                          const std::vector<std::vector<double>>& n_yaws,
                          std::vector<Eigen::Vector2d>& refined_pts,
                          std::vector<double>& refined_yaws);
-    void shortenPath(std::vector<Eigen::Vector2d>& path);
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg);
     void publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters,
                                bool empty = false);
     void publishPathplanningStatus(const std::vector<Eigen::Vector2d>& global_path,
-                                   const std::vector<Eigen::Vector2d>& local_path,
                                    const Eigen::Vector2d& next_pos,
                                    const double next_yaw,
+                                   const std::vector<Eigen::Vector2d>& refined_path,
                                    bool empty = false);
     void publishEmptyMarkers();
     double wrapYaw(double yaw);
+
+    // Separate callback groups for path planning and odometry callbacks
+    rclcpp::CallbackGroup::SharedPtr cb_group_path_planning_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_odometry_;
+
+    // Timers for path planning
+    rclcpp::TimerBase::SharedPtr path_planning_init_timer_;
+    rclcpp::TimerBase::SharedPtr path_planning_timer_;
 
     // Subscribers and publishers
 
@@ -73,12 +80,11 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_odometry_;
 
     // Target trajectory and yaw publishers for trajectory generation
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr publisher_trajectory_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_yaw_;
+    rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr publisher_pos_target_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_yaw_target_;
 
     // Publishers for log output and rviz visualization
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_global_path_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_path_to_next_goal_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_refined_views_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_next_viewpoint_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_frontiers_;
@@ -91,7 +97,7 @@ private:
     // Params
     std::string vehicle_name_;
     PerceptionUtils::InitFOVParams fov_params_;
-    Astar::InitAstarParams path_astar_params_, trajectory_astar_params_;
+    Astar::InitAstarParams path_astar_params_;
     FrontierFinder::InitFrontierParams frontier_params_;
 
     // Maximum search times for global and local A* searches (in seconds, for each path)
@@ -102,9 +108,6 @@ private:
     // solving the ATSP (false)
     double global_tour_greedy_;
 
-    // Distance threshold for consecutive points for path shortening
-    double shorten_path_dist_thresh_;
-
     // Flag to enable local tour refinement
     bool refine_local_;
     // Max. number and max. distance from robot of clusters to consider in refinement
@@ -112,7 +115,7 @@ private:
     double refine_radius_;
     // Number of viewpoints to consider for each cluster and the
     // maximum decay factor for refinement
-    int refine_num_viewpoints_;
+    int refine_num_viewpoints_, refine_num_viewpoints_first_;
     double refine_max_decay_;
 
     // Maximum velocity, maximum yaw rate, weight for yaw change,
@@ -127,11 +130,8 @@ private:
 
     // Utils
     std::shared_ptr<VisualizationUtils> vis_utils_;
-    rclcpp::TimerBase::SharedPtr path_planning_init_timer_;
-    rclcpp::TimerBase::SharedPtr path_planning_timer_;
     std::vector<std::array<double, 3>> frontier_colors_;
     std::shared_ptr<FrontierFinder> frontier_finder_;
-    std::shared_ptr<TrajectoryPlanner> trajectory_planner_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
@@ -152,6 +152,7 @@ private:
     double frontier_max_time_ = 0.0;
     double dijkstra_max_time_ = 0.0;
     double tsp_max_time_ = 0.0;
+    double pathplanning_max_time_ = 0.0;
 
     // flags for odometry and initialization rotation
     bool odometry_received_ = false;

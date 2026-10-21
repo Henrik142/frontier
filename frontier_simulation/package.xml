@@ -15,6 +15,7 @@
   <depend>path_searching</depend>
   <depend>path_following</depend>
   <depend>lkh_tsp_solver</depend>
+  <depend>frontier_utils</depend>
   <depend>eigen3_cmake_module</depend>
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>

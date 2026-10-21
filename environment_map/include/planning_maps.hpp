@@ -5,7 +5,8 @@
 class PlanningMaps {
     
 public:
-    PlanningMaps(const Map::InitMapParams& p) {
+    PlanningMaps(const Map::InitMapParams& p, size_t max_readers) {
+        slots_.resize(max_readers + 2);
         for (auto& s : slots_) {
             s = std::make_shared<Map>();
             s->initMap(p);
@@ -39,22 +40,25 @@ public:
     }
 
     // Updater (single writer): copy the real map's data into a free slot, then publish it.
-    void publish(const Map& real) {
+    bool publish(const Map& real) {
         int target = -1;
         {
             std::lock_guard lk(m_);
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < slots_.size(); ++i)
                 if (i != latest_ && slots_[i].use_count() == 1) { target = i; break; }
         }
+        if (target < 0) return false;
+
         // no lock needed: nobody can acquire this slot
         slots_[target]->setDataFrom(real);
 
         std::lock_guard lk(m_);
         latest_ = target;
+        return true;
     };
 
 private:
-    std::array<std::shared_ptr<Map>, 3> slots_;
+    std::vector<std::shared_ptr<Map>> slots_;
     mutable std::mutex m_;
     int latest_ = 0;
     bool reset_updated_box_ = true;
