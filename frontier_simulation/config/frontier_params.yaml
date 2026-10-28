@@ -42,18 +42,18 @@
       refine_num_viewpoints: 15
       refine_num_viewpoints_first: 30
       refine_max_decay: 0.3
-      vm: 2.0
+      vm: 1.0
       yd: 1.0
       w_y: 0.2
-      w_dir: 0.0
+      w_dir: 0.1
       astar:
         resolution: 0.3
         lambda_heu: 10.0
-        max_search_time_global: 0.0005
+        max_search_time_global: 0.001
         max_search_time_local: 0.001
-        allocate_num: 100000
+        allocate_num: 1000
     trajectory_planning:
-      update_rate_ms: 100
+      update_rate_ms: 50
       shorten_path_dist_thresh: 3.0
       astar:
         resolution: 0.1
@@ -61,9 +61,9 @@
         max_search_time: 0.1
         allocate_num: 100000
     path_following:
-      velocity_setpoint: 2.0
+      velocity_setpoint: 1.0
       roll_setpoint: 0.0
       min_target_dist: 0.05
       slow_dist: 0.1
     velocity_control:
-      kp: 0.8
+      kp: 1.5

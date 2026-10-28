@@ -110,11 +110,22 @@ void PathFollower::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odo
         // Limit the target velocity according to the robot's heading and the target heading
         double cosine = std::clamp(std::cos(hippo_yaw) * target_heading.x() +
                                    std::sin(hippo_yaw) * target_heading.y(), -1.0, 1.0);
+        
+        double angle = std::acos(cosine);
+
+        if (angle < M_PI / 2.0) {
+            target_velocity *= ( std::cos(angle*2) + 1.0) / 2.0;
+        } else {
+            target_velocity = 0.0;
+        }
+
+        /*
         if (cosine > 0.0) {
             target_velocity *= cosine;
         } else {
             target_velocity = 0.0;
         }
+        */
         
         // Limit the target velocity when the robot is approaching the viewpoint
         target_velocity = std::min(target_velocity,

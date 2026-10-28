@@ -5,6 +5,9 @@ double ViewNode::vm_;
 double ViewNode::yd_;
 double ViewNode::w_y;
 double ViewNode::w_dir_;
+double ViewNode::map_resolution_;
+Eigen::Vector2d ViewNode::map_origin_;
+Astar::InitAstarParams ViewNode::astar_params_;
 std::shared_ptr<Astar> ViewNode::astar_;
 std::shared_ptr<RayCaster> ViewNode::caster_;
 std::shared_ptr<const Map> ViewNode::map_;
@@ -59,6 +62,57 @@ double ViewNode::searchPath(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2
     if (astar_->search(p1, p2) == Astar::REACH_END) {
         path = astar_->getPath();
         return astar_->pathLength(path);
+    }
+
+    // Return very high path length if path cannot be found
+    path = { p1, p2 };
+    return 1000.0;
+}
+
+double ViewNode::searchPathMod(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, std::vector<Eigen::Vector2d>& path,
+                               Astar& astar_local, RayCaster& caster_local) {
+    // Try connect two points with straight line
+    bool safe = true;
+    Eigen::Vector2i idx;
+
+    caster_local.input(p1, p2);
+    while (caster_local.nextId(idx)) {
+        if (!(map_->getInflatedOccupancy(idx) == Map::FREE) || !map_->isInMap(idx)) {
+            safe = false;
+            break;
+        }
+    }
+    if (safe) {
+        path = { p1, p2 };
+        return (p1 - p2).norm();
+    }
+
+    /*
+    // Search a path using decreasing resolution
+    // the smallest resolution determines the smallest gap that
+    // can be navigated by the path search
+    std::vector<double> res = {0.3, 0.2, 0.1 };
+    for (int k = 0; k < res.size(); ++k) {
+        astar_->reset();
+        astar_->setResolution(res[k]);
+        if (astar_->search(p1, p2) == Astar::REACH_END) {
+            path = astar_->getPath();
+            return astar_->pathLength(path);
+        }
+    }
+    */
+
+    // Search path with A* if the straight line connection is not safe
+    // thread_local Astar astar_local;
+    // thread_local bool initialized = false;
+    // if (!initialized) {
+    //     astar_local.init(astar_params_, map_);
+    //     initialized = true;
+    // }
+    astar_local.reset();
+    if (astar_local.search(p1, p2) == Astar::REACH_END) {
+        path = astar_local.getPath();
+        return astar_local.pathLength(path);
     }
 
     // Return very high path length if path cannot be found
@@ -143,12 +197,43 @@ double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p
 }
 
 
-// Cost function without cost of yaw change (for calculating the cost between two cluster centroids)
+// Cost function without cost of yaw change (for calculating the costs of paths for the global planning)
 double ViewNode::computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
                              const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path) {
     // Cost of position change
     // Path cost = Path length / maximum velocity
     double pos_cost = ViewNode::searchPath(p1, p2, path);
+    if (pos_cost >= 999.0) return 1000.0;
+    pos_cost = pos_cost / vm_;
+
+    /* Motion consistency cost
+    This is only added for the connection cost between the robot's own state
+    and any cluster centroid, since when calculating the cost between a pair of clusters,
+    the velocity is zero.
+    It penalizes large changes in flight direction to prevent back-and-forth
+    maneuvers in successive planning steps.
+    */
+    Eigen::Vector2d delta = p2 - p1;
+    if (v1.norm() > 1e-3 && delta.norm() > 1e-9) {
+        Eigen::Vector2d vdir = v1.normalized();
+        Eigen::Vector2d dir = delta.normalized();
+
+        double cosine = std::clamp(vdir.dot(dir), -1.0, 1.0);
+        double angle = std::acos(cosine);
+
+        pos_cost += w_dir_ * angle;
+    }
+
+    return pos_cost;
+}
+
+// Cost function without cost of yaw change (for calculating the costs of paths for the global planning)
+double ViewNode::computeCostMod(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
+                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path,
+                             Astar& astar, RayCaster& caster) {
+    // Cost of position change
+    // Path cost = Path length / maximum velocity
+    double pos_cost = ViewNode::searchPathMod(p1, p2, path, astar, caster);
     if (pos_cost >= 999.0) return 1000.0;
     pos_cost = pos_cost / vm_;
 

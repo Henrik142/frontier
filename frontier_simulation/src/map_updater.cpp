@@ -17,6 +17,7 @@ MapUpdater::MapUpdater() : Node("map_updater") {
             "occupancy_grid", rclcpp::QoS(1).transient_local());
     publisher_updated_box_ = this->create_publisher<visualization_msgs::msg::Marker>("sensor_updated_box", 10);
     publisher_distance_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/distance", 10);
+    publisher_map_update_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/map_update", 10);
 
     // Initialize two mutually exclusive callback groups that enable concurrent callbacks
     cb_group_sub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -208,6 +209,9 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     if (t2 - t1 > update_max_time_) {
         update_max_time_ = t2 - t1;
     }
+    std_msgs::msg::Float64 update_time_msg;
+    update_time_msg.data = t2 - t1;
+    publisher_map_update_time_->publish(update_time_msg);
     RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds (max time: %f)", t2 - t1, update_max_time_);
 }
 

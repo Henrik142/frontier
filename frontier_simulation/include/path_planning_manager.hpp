@@ -94,6 +94,15 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_velocity_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_string_;
 
+    // Publishers for processing times
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_path_planning_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_map_acquire_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_frontier_update_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_cost_matrix_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_publish_frontiers_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_ATSP_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_refinement_time_;
+
     // Params
     std::string vehicle_name_;
     PerceptionUtils::InitFOVParams fov_params_;

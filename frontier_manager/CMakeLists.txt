@@ -8,6 +8,7 @@ find_package(environment_map REQUIRED)
 find_package(frontier_perception REQUIRED)
 find_package(path_searching REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(OpenMP REQUIRED)
 
 add_library(frontier_manager STATIC
   src/frontiers.cpp
@@ -20,7 +21,7 @@ target_include_directories(frontier_manager PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(frontier_manager Eigen3::Eigen)
+target_link_libraries(frontier_manager Eigen3::Eigen OpenMP::OpenMP_CXX)
 ament_target_dependencies(frontier_manager
   environment_map
   frontier_perception
@@ -42,5 +43,5 @@ install(
 )
 
 ament_export_targets(frontier_managerTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(Eigen3 frontier_perception environment_map path_searching)
+ament_export_dependencies(Eigen3 OpenMP frontier_perception environment_map path_searching)
 ament_package()

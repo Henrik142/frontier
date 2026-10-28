@@ -49,8 +49,19 @@ public:
                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path);
   static double computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path);
+  // Thread-safe variants: the caller supplies per-thread Astar/RayCaster instances
+  static double computeCostMod(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
+                            const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path,
+                            Astar& astar, RayCaster& caster);
   // Coarse to fine path searching
   static double searchPath(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, std::vector<Eigen::Vector2d>& path);
+  static double searchPathMod(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, std::vector<Eigen::Vector2d>& path,
+                              Astar& astar, RayCaster& caster);
+
+  // Params
+  static double map_resolution_;
+  static Eigen::Vector2d map_origin_;
+  static Astar::InitAstarParams astar_params_;
 
   // Data
   std::vector<ViewNode::Ptr> neighbors_;

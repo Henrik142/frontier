@@ -357,11 +357,18 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 // top viewpoint are considered
                 int visib_thresh = cluster.viewpoints_.front().visib_num_ * max_decay;
 
+                bool first_cluster_overflow = false;
+
                 for (const Viewpoint& view : cluster.viewpoints_) {
                     // Check if the maximum number of viewpoints has already been reached,
                     // but not for the first cluster. For the first one, all viewpoints
                     // are considered for now and there's a separate check below.
-                    if (idx > 0 && current_viewpoints.size() >= view_num[idx]) break;
+                    if (idx > 0 && current_viewpoints.size() >= view_num[idx]) {
+                        break;
+                    } else if (idx == 0 && current_viewpoints.size() > view_num[idx]) {
+                        first_cluster_overflow = true;
+                        break;
+                    }
 
                     // Check if the viewpoint is below the visibility threshold.
                     // In that case, we can stop adding more viewpoints as the viewpoints are
@@ -380,7 +387,7 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
                 // Separate maximum number of viewpoints check for the first cluster
                 // If the first cluster has too many viewpoints, we clear the current viewpoints and
                 // select the closest ones (which are still above the visibility threshold) instead.
-                if (idx == 0 && current_viewpoints.size() > view_num[idx]) {
+                if (first_cluster_overflow) {
                     current_viewpoints.clear();
                     std::vector<Viewpoint> sorted_viewpoints = cluster.viewpoints_;
                     // Sort the viewpoints by distance from the current position, closest first
@@ -444,10 +451,15 @@ void FrontierFinder::getPathForTour(const Eigen::Vector2d& pos,
     // Compute the path from current pos to the first frontier
     std::vector<Eigen::Vector2d> segment;
     const auto& first_cluster = *cluster_indexer[frontier_ids[0]];
+    
+    /*
     Eigen::Vector2d target_pos = first_cluster.average_pos_;
     if (getOccupancy(target_pos) != Map::FREE) {
         findClosestPosToCentroid(first_cluster, target_pos);
     }
+    */
+    Eigen::Vector2d target_pos = first_cluster.viewpoints_.front().robot_pos_;
+    
     ViewNode::searchPath(pos, target_pos, segment);
     path.insert(path.end(), segment.begin(), segment.end());
 
@@ -485,23 +497,47 @@ void FrontierFinder::getFullCostMatrix(const Eigen::Vector2d& cur_pos,
     mat.leftCols<1>().setZero();
 
     // Fill first row (costs from current state to cluster centroids)
+
+    /*
+    // Serial implementation
     for (const FrontierCluster& ftr : clusters_) {
       std::vector<Eigen::Vector2d> path;
-      Eigen::Vector2d target_pos = ftr.average_pos_;
-      if (getOccupancy(target_pos) != Map::FREE) {
-        findClosestPosToCentroid(ftr, target_pos);
-      }
-      double cost = 1000.0;
-      int attempt = 0;
-      while (attempt < 2) {
-        if (attempt == 1) {
-          target_pos = ftr.viewpoints_.front().robot_pos_;
-        }
-        cost = ViewNode::computeCost(cur_pos, target_pos, cur_vel, path);
-        if (cost < 999.0) break;
-        ++attempt;
-      }
+
+      Eigen::Vector2d target_pos = ftr.viewpoints_.front().robot_pos_;
+      double cost = ViewNode::computeCost(cur_pos, target_pos, cur_vel, path);
+
       mat(0, j++) = cost;
+    }
+    */
+
+    // Parallel implementation
+    std::vector<double> results(clusters_.size());
+
+    std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
+    for (auto it = clusters_.begin(); it != clusters_.end(); ++it)
+        cluster_indexer.push_back(it);
+
+    // Each thread owns its Astar/RayCaster, destroyed at the end of the region so that
+    // no thread keeps a reference to the map slot afterwards.
+    #pragma omp parallel
+    {
+        Astar astar;
+        astar.init(ViewNode::astar_params_, ViewNode::map_);
+        RayCaster caster;
+        caster.setParams(ViewNode::map_resolution_, ViewNode::map_origin_);
+
+        #pragma omp for schedule(dynamic)
+        for (int i = 0; i < clusters_.size(); ++i) {
+            const FrontierCluster& ftr = *cluster_indexer[i];
+            std::vector<Eigen::Vector2d> path;
+            results[i] = ViewNode::computeCostMod(
+                cur_pos, ftr.viewpoints_.front().robot_pos_, cur_vel, path, astar, caster);
+        }
+    }
+
+    // 3) Apply the results serially, in the original order
+    for (size_t i = 0; i < clusters_.size(); ++i) {
+        mat(0, i + 1) = results[i];
     }
 }
 
@@ -535,6 +571,8 @@ void FrontierFinder::updateFrontierCostMatrix() {
         std::vector<Eigen::Vector2d> path_ij;
         const auto& cluster_i = *it1;
         const auto& cluster_j = *it2;
+
+        /*
         Eigen::Vector2d target_pos_i = cluster_i.average_pos_;
         Eigen::Vector2d target_pos_j = cluster_j.average_pos_;
         if (this->getOccupancy(target_pos_i) != Map::FREE) {
@@ -566,6 +604,12 @@ void FrontierFinder::updateFrontierCostMatrix() {
             if (cost_ij < 999.0) break;
             ++attempt;
         }
+        */
+
+        Eigen::Vector2d target_pos_i = cluster_i.viewpoints_.front().robot_pos_;
+        Eigen::Vector2d target_pos_j = cluster_j.viewpoints_.front().robot_pos_;
+        double cost_ij = ViewNode::computeCost(
+                target_pos_i, target_pos_j, Eigen::Vector2d(0, 0), path_ij);
 
         // Insert item for both old and new clusters
         it1->costs_.push_back(cost_ij);
@@ -575,6 +619,8 @@ void FrontierFinder::updateFrontierCostMatrix() {
         it2->paths_.push_back(path_ij);
     };
 
+    /*
+    // Serial implementation
     // Compute path and cost between old and new clusters
     for (auto it1 = clusters_.begin(); it1 != first_new_cluster_; ++it1) {
         for (auto it2 = first_new_cluster_; it2 != clusters_.end(); ++it2) {
@@ -592,6 +638,75 @@ void FrontierFinder::updateFrontierCostMatrix() {
                 updateCost(it1, it2);
             }
         }
+    }
+    */
+    
+    
+    // Parallel implementation
+    // 1) Build the job list in the same order as the serial loops, so that the
+    //    per-cluster ordering of costs_/paths_ stays identical.
+    struct CostJob {
+        std::list<FrontierCluster>::iterator it1;
+        std::list<FrontierCluster>::iterator it2;
+        bool is_self;  // it1 == it2: cost 0 and empty path, no search needed
+    };
+    struct CostResult {
+        double cost = 0.0;
+        std::vector<Eigen::Vector2d> path;
+    };
+
+    std::vector<CostJob> jobs;
+
+    // Old clusters <-> new clusters
+    for (auto it1 = clusters_.begin(); it1 != first_new_cluster_; ++it1) {
+        for (auto it2 = first_new_cluster_; it2 != clusters_.end(); ++it2) {
+            jobs.push_back({it1, it2, false});
+        }
+    }
+    // New clusters <-> new clusters (including the self entry)
+    for (auto it1 = first_new_cluster_; it1 != clusters_.end(); ++it1) {
+        for (auto it2 = it1; it2 != clusters_.end(); ++it2) {
+            jobs.push_back({it1, it2, it1 == it2});
+        }
+    }
+
+    // 2) Compute costs and paths in parallel. Each iteration only reads the
+    //    clusters' viewpoints and writes its own results[i].
+    std::vector<CostResult> results(jobs.size());
+
+    // Each thread owns its Astar/RayCaster, destroyed at the end of the region so that
+    // no thread keeps a reference to the map slot afterwards.
+    #pragma omp parallel
+    {
+        Astar astar;
+        astar.init(ViewNode::astar_params_, ViewNode::map_);
+        RayCaster caster;
+        caster.setParams(ViewNode::map_resolution_, ViewNode::map_origin_);
+
+        #pragma omp for schedule(dynamic)
+        for (int i = 0; i < static_cast<int>(jobs.size()); ++i) {
+            if (jobs[i].is_self) continue;
+            const Eigen::Vector2d& target_pos_i = jobs[i].it1->viewpoints_.front().robot_pos_;
+            const Eigen::Vector2d& target_pos_j = jobs[i].it2->viewpoints_.front().robot_pos_;
+            results[i].cost = ViewNode::computeCostMod(
+                target_pos_i, target_pos_j, Eigen::Vector2d(0, 0), results[i].path, astar, caster);
+        }
+    }
+
+    // 3) Apply the results serially, in the original order
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        auto& job = jobs[i];
+        auto& res = results[i];
+        if (job.is_self) {
+            job.it1->costs_.push_back(0);
+            job.it1->paths_.push_back({});
+            continue;
+        }
+        job.it1->costs_.push_back(res.cost);
+        job.it1->paths_.push_back(res.path);
+        std::reverse(res.path.begin(), res.path.end());
+        job.it2->costs_.push_back(res.cost);
+        job.it2->paths_.push_back(res.path);
     }
 }
     

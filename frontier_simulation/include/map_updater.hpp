@@ -8,6 +8,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <visualization_msgs/msg/marker.hpp>
+#include <std_msgs/msg/float64.hpp>
 
 #include <Eigen/Eigen>
 
@@ -60,6 +61,8 @@ private:
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr publisher_map_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_updated_box_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_distance_;
+
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_map_update_time_;
 
     // Params
     PerceptionUtils::InitFOVParams fov_params_;
