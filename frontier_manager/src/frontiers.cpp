@@ -440,6 +440,7 @@ void FrontierFinder::getViewpointsInfo(const Eigen::Vector2d& cur_pos,
     }
 }
 
+/*
 void FrontierFinder::getPathForTour(const Eigen::Vector2d& pos,
                                     const std::vector<int>& frontier_ids,
                                     std::vector<Eigen::Vector2d>& path) {
@@ -452,12 +453,6 @@ void FrontierFinder::getPathForTour(const Eigen::Vector2d& pos,
     std::vector<Eigen::Vector2d> segment;
     const auto& first_cluster = *cluster_indexer[frontier_ids[0]];
     
-    /*
-    Eigen::Vector2d target_pos = first_cluster.average_pos_;
-    if (getOccupancy(target_pos) != Map::FREE) {
-        findClosestPosToCentroid(first_cluster, target_pos);
-    }
-    */
     Eigen::Vector2d target_pos = first_cluster.viewpoints_.front().robot_pos_;
     
     ViewNode::searchPath(pos, target_pos, segment);
@@ -474,6 +469,7 @@ void FrontierFinder::getPathForTour(const Eigen::Vector2d& pos,
         path.insert(path.end(), path_iter->begin(), path_iter->end());
     }
 }
+*/
 
 void FrontierFinder::getFullCostMatrix(const Eigen::Vector2d& cur_pos,
                                        const Eigen::Vector2d& cur_vel,

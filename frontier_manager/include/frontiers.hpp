@@ -75,9 +75,9 @@ public:
                            const double& max_decay,
                            std::vector<std::vector<Eigen::Vector2d>>& points,
                            std::vector<std::vector<double>>& yaws);
-    void getPathForTour(const Eigen::Vector2d& pos,
-                        const std::vector<int>& frontier_ids,
-                        std::vector<Eigen::Vector2d>& path);
+    //void getPathForTour(const Eigen::Vector2d& pos,
+    //                    const std::vector<int>& frontier_ids,
+    //                    std::vector<Eigen::Vector2d>& path);
     void getFullCostMatrix(const Eigen::Vector2d& cur_pos,
                            const Eigen::Vector2d& cur_vel,
                            const double& cur_yaw,

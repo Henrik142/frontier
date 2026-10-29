@@ -11,6 +11,10 @@
 #include <algorithm>
 #include <Eigen/Eigen>
 
+#include "astar.hpp"
+#include "raycast.hpp"
+#include "viewpoint_graph.hpp"
+
 template <typename NodeT>
 class GraphSearch {
 public:
@@ -26,6 +30,7 @@ public:
   void addEdge(const int& from, const int& to);
   void DijkstraSearch(const int& start, const int& goal, std::vector<std::shared_ptr<NodeT>>& path);
   void FullDijkstraSearch(const int& start, std::vector<std::shared_ptr<NodeT>>& path);
+  void FullDijkstraSearchMod(const int& start, std::vector<std::shared_ptr<NodeT>>& path);
 
 private:
   std::vector<std::shared_ptr<NodeT>> nodes_;
@@ -131,6 +136,87 @@ void GraphSearch<NodeT>::FullDijkstraSearch(const int& start,
 
       // Add new node or updated node in open set
       double g_tmp = vc->g_value_ + vc->costTo(vb);
+      if (g_tmp < vb->g_value_) {
+        vb->g_value_ = g_tmp;
+        vb->parent_ = vc;
+        open_set.push(vb);
+      }
+    }
+  }
+
+  // Pick the reached leaf node (no children) with the lowest g_value_
+  std::shared_ptr<NodeT> vlast = nullptr;
+  for (const auto& v : nodes_) {
+    if (!v->neighbors_.empty() || !v->closed_) continue;
+    if (vlast == nullptr || v->g_value_ < vlast->g_value_) vlast = v;
+  }
+  if (vlast == nullptr) return;
+
+  std::shared_ptr<NodeT> vit = vlast;
+  while (vit != nullptr) {
+    path.push_back(vit);
+    vit = vit->parent_;
+  }
+  std::reverse(path.begin(), path.end());
+  return;
+}
+
+template <typename NodeT>
+void GraphSearch<NodeT>::FullDijkstraSearchMod(const int& start,
+                                        std::vector<std::shared_ptr<NodeT>>& path) {
+  // Modified Dijkstra search that finds the shortest path to all reachable nodes
+  // returns the shortest path to among all paths to reachable leaf nodes
+  
+  // Basic structure used by Dijkstra
+  std::priority_queue<std::shared_ptr<NodeT>,
+                      std::vector<std::shared_ptr<NodeT>>,
+                      NodeCompare<NodeT>> open_set;
+
+  // Precompute all edge costs in parallel. The graph is layered (no back edges) and has no
+  // goal, so every edge is evaluated by the search anyway, and edge costs do not depend on
+  // g_value_/parent_/closed_.
+  std::vector<std::pair<int, int>> edges;  // (node index, neighbor index)
+  for (int n = 0; n < static_cast<int>(nodes_.size()); ++n) {
+    nodes_[n]->costs_to_neighbors_.assign(nodes_[n]->neighbors_.size(), 0.0);
+    for (int k = 0; k < static_cast<int>(nodes_[n]->neighbors_.size()); ++k) {
+      edges.emplace_back(n, k);
+    }
+  }
+
+  // Each thread owns its Astar/RayCaster; they are destroyed at the end of the region so no
+  // thread keeps a reference to the map.
+  #pragma omp parallel
+  {
+    Astar astar;
+    astar.init(ViewNode::astar_params_, ViewNode::map_);
+    RayCaster caster;
+    caster.setParams(ViewNode::map_resolution_, ViewNode::map_origin_);
+
+    #pragma omp for schedule(dynamic)
+    for (int e = 0; e < static_cast<int>(edges.size()); ++e) {
+      const auto& vc = nodes_[edges[e].first];
+      const int k = edges[e].second;
+      vc->costs_to_neighbors_[k] = vc->costToMod(vc->neighbors_[k], astar, caster);
+    }
+  }
+
+  std::shared_ptr<NodeT> start_v = nodes_[start];
+  start_v->g_value_ = 0.0;
+  open_set.push(start_v);
+
+  while (!open_set.empty()) {
+    auto vc = open_set.top();
+    open_set.pop();
+    vc->closed_ = true;
+
+    // for (auto vb : vc->neighbors_) {
+    for (size_t k = 0; k < vc->neighbors_.size(); ++k) {
+      auto vb = vc->neighbors_[k];
+      // Check if in close set
+      if (vb->closed_) continue;
+
+      // Add new node or updated node in open set
+      double g_tmp = vc->g_value_ + vc->costs_to_neighbors_[k];
       if (g_tmp < vb->g_value_) {
         vb->g_value_ = g_tmp;
         vb->parent_ = vc;

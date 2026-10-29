@@ -50,6 +50,10 @@ public:
   static double computeCost(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path);
   // Thread-safe variants: the caller supplies per-thread Astar/RayCaster instances
+  double costToMod(const ViewNode::Ptr& node, Astar& astar, RayCaster& caster);
+  static double computeCostMod(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2, const double& y1, const double& y2,
+                            const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path,
+                            Astar& astar, RayCaster& caster);
   static double computeCostMod(const Eigen::Vector2d& p1, const Eigen::Vector2d& p2,
                             const Eigen::Vector2d& v1, std::vector<Eigen::Vector2d>& path,
                             Astar& astar, RayCaster& caster);
@@ -65,6 +69,8 @@ public:
 
   // Data
   std::vector<ViewNode::Ptr> neighbors_;
+  // Precomputed edge costs, same order as neighbors_ (filled by GraphSearch::FullDijkstraSearchMod)
+  std::vector<double> costs_to_neighbors_;
   ViewNode::Ptr parent_;
   Eigen::Vector2d pos_, vel_;
   double yaw_;

@@ -56,6 +56,7 @@ private:
                          std::vector<Eigen::Vector2d>& refined_pts,
                          std::vector<double>& refined_yaws);
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg);
+    void publishRvizAndInfo();
     void publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters,
                                bool empty = false);
     void publishPathplanningStatus(const std::vector<Eigen::Vector2d>& global_path,
@@ -69,10 +70,12 @@ private:
     // Separate callback groups for path planning and odometry callbacks
     rclcpp::CallbackGroup::SharedPtr cb_group_path_planning_;
     rclcpp::CallbackGroup::SharedPtr cb_group_odometry_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_publish_rviz_and_info_;
 
     // Timers for path planning
     rclcpp::TimerBase::SharedPtr path_planning_init_timer_;
     rclcpp::TimerBase::SharedPtr path_planning_timer_;
+    rclcpp::TimerBase::SharedPtr publish_rviz_and_info_timer_;
 
     // Subscribers and publishers
 
@@ -96,10 +99,10 @@ private:
 
     // Publishers for processing times
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_path_planning_time_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_map_acquire_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_data_acquire_time_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_frontier_update_time_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_cost_matrix_time_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_publish_frontiers_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_global_tour_time_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_ATSP_time_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_refinement_time_;
 
@@ -115,7 +118,7 @@ private:
 
     // Flag to decide if the global tour should be computed greedily (true) or by
     // solving the ATSP (false)
-    double global_tour_greedy_;
+    bool global_tour_greedy_;
 
     // Flag to enable local tour refinement
     bool refine_local_;
@@ -148,6 +151,20 @@ private:
     std::shared_ptr<PlanningMaps> planning_maps_;
     std::shared_ptr<const Map> most_recent_map_;
     std::shared_ptr<std::atomic_bool> map_ready_;
+
+    // Data for info and visualization
+    std::list<FrontierCluster> frontier_clusters_;
+    std::vector<int> removed_cluster_ids_;
+    Eigen::MatrixXd cost_mat_;
+    std::vector<int> tour_;
+    Eigen::Vector2d next_pos_;
+    double next_yaw_;
+    std::vector<Eigen::Vector2d> refined_points_;
+    double t_data_acquire_,
+           t_frontier_update_,
+           t_cost_matrix_,
+           t_global_tour_,
+           t_local_refine_;
     
     // Robot state
     Eigen::Vector2d hippo_position_;
@@ -163,10 +180,15 @@ private:
     double tsp_max_time_ = 0.0;
     double pathplanning_max_time_ = 0.0;
 
+    // Mutex
+    std::mutex hippo_state_mutex_;
+    std::mutex viz_mutex_;
+
     // flags for odometry and initialization rotation
     bool odometry_received_ = false;
     bool init_rotation_started_ = false;
     bool init_rotation_halfway_ = false;
     bool init_rotation_finished_ = false;
     bool path_planning_initialized_ = false;
+    bool path_planning_active_ = false;
 };

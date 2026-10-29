@@ -4,6 +4,7 @@ project(path_searching)
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(environment_map REQUIRED)
+find_package(OpenMP REQUIRED)
 
 add_library(path_searching STATIC
   src/astar.cpp
@@ -18,7 +19,7 @@ ament_target_dependencies(path_searching
   environment_map
 )
 
-target_link_libraries(path_searching Eigen3::Eigen)
+target_link_libraries(path_searching Eigen3::Eigen OpenMP::OpenMP_CXX)
 
 install(
   DIRECTORY include/
@@ -36,5 +37,6 @@ install(
 ament_export_targets(path_searchingTargets HAS_LIBRARY_TARGET)
 ament_export_dependencies(
   environment_map
+  OpenMP
 )
 ament_package()

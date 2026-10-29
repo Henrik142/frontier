@@ -21,16 +21,10 @@ PathPlanningManager::PathPlanningManager(
     ViewNode::w_y = w_y_;          // yaw change weight
     ViewNode::w_dir_ = w_dir_;     // motion consistency weight
 
+    ViewNode::map_ = most_recent_map_;
     ViewNode::map_resolution_ = resolution;
     ViewNode::map_origin_ = origin;
     ViewNode::astar_params_ = path_astar_params_;
-
-    ViewNode::astar_.reset(new Astar);
-    ViewNode::astar_->init(path_astar_params_, most_recent_map_);
-    ViewNode::map_ = most_recent_map_;
-
-    ViewNode::caster_.reset(new RayCaster);
-    ViewNode::caster_->setParams(resolution, origin);
 
     // Initialize utils
     vis_utils_.reset(new VisualizationUtils());
@@ -50,7 +44,7 @@ PathPlanningManager::PathPlanningManager(
                 << "MOVE_TYPE = 5\n"
                 << "PATCHING_C = 3\n"
                 << "PATCHING_A = 2\n"
-                << "RUNS = 10\n"
+                << "RUNS = 1\n"
                 << "OUTPUT_TOUR_FILE = " << data_dir_ << "/single.txt\n";
     }
 
@@ -58,9 +52,10 @@ PathPlanningManager::PathPlanningManager(
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-    // Initialize two mutually exclusive callback groups that enable concurrent callbacks
+    // Initialize three mutually exclusive callback groups that enable concurrent callbacks
     cb_group_path_planning_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cb_group_odometry_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_publish_rviz_and_info_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     // Initialize publishers and subscribers
     publisher_global_path_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/global_path", 10);
@@ -76,10 +71,10 @@ PathPlanningManager::PathPlanningManager(
     publisher_yaw_target_ = this->create_publisher<std_msgs::msg::Float64>("frontier/next_yaw", 10);
 
     publisher_path_planning_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/path_planning", 10);
-    publisher_map_acquire_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/map_acquire", 10);
+    publisher_data_acquire_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/data_acquire", 10);
     publisher_frontier_update_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/frontier_update", 10);
     publisher_cost_matrix_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/cost_matrix", 10);
-    publisher_publish_frontiers_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/publish_frontiers", 10);
+    publisher_global_tour_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/global_tour", 10);
     publisher_ATSP_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/ATSP", 10);
     publisher_refinement_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/refinement", 10);
 
@@ -102,6 +97,12 @@ PathPlanningManager::PathPlanningManager(
         std::chrono::milliseconds(update_rate_ms_),
         std::bind(&PathPlanningManager::pathPlanningCallback, this),
         cb_group_path_planning_);
+
+    // Create timer for publishing RViz and info
+    publish_rviz_and_info_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(static_cast<int>(0.5 * update_rate_ms_)),
+        std::bind(&PathPlanningManager::publishRvizAndInfo, this),
+        cb_group_publish_rviz_and_info_);
 
     RCLCPP_INFO(this->get_logger(), "Node started");
 }
@@ -293,19 +294,38 @@ int PathPlanningManager::pathPlanningCallback() {
 
     double t1 = this->now().seconds();
 
+    // --------------------------------------------------------------------------------
+
+    RCLCPP_INFO(this->get_logger(), "Acquiring most recent data.");
+
+    double t1_data_acquire = this->now().seconds();
+
+    // Acquire the most recent map and set it for all consumers
+    
     most_recent_map_ = planning_maps_->acquire(true);
     frontier_finder_->setMap(most_recent_map_);
     ViewNode::map_ = most_recent_map_;
-    ViewNode::astar_->setMap(most_recent_map_);
 
     path_astar_params_.max_search_time = max_search_time_global_;
     ViewNode::astar_params_ = path_astar_params_;
-    ViewNode::astar_->setParams(path_astar_params_);
 
-    double t_intermediate = this->now().seconds();
-    std_msgs::msg::Float64 map_acquire_time_msg;
-    map_acquire_time_msg.data = t_intermediate - t1;
-    publisher_map_acquire_time_->publish(map_acquire_time_msg);
+    Eigen::Vector2d hippo_position;
+    Eigen::Vector2d hippo_velocity;
+    double hippo_yaw;
+    {
+        std::lock_guard<std::mutex> lock(hippo_state_mutex_);
+        hippo_position = hippo_position_;
+        hippo_velocity = hippo_velocity_;
+        hippo_yaw = hippo_yaw_;
+    }
+
+    double t2_data_acquire = this->now().seconds();
+
+    // --------------------------------------------------------------------------------
+
+    RCLCPP_INFO(this->get_logger(), "Updating frontiers.");
+
+    double t1_frontier_update = this->now().seconds();
 
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
@@ -317,103 +337,56 @@ int PathPlanningManager::pathPlanningCallback() {
         return NO_FRONTIER;
     }
 
-    std::vector<int> removed_clusters = frontier_finder_->getRemovedIds();
-    std::string removed_info = "Removed cluster IDs: ";
-    for (int removed_id : removed_clusters) {
-        std::ostringstream oss;
-        oss << removed_id;
-        if (removed_id != removed_clusters.back()) oss << ",";
-        removed_info += oss.str();
-    }
-    RCLCPP_INFO(this->get_logger(), "%s", removed_info.c_str());
+    std::vector<int> removed_cluster_ids = frontier_finder_->getRemovedIds();
 
-    double t_intermediate_2 = this->now().seconds();
-    std_msgs::msg::Float64 frontier_update_time_msg;
-    frontier_update_time_msg.data = t_intermediate_2 - t_intermediate;
-    publisher_frontier_update_time_->publish(frontier_update_time_msg);
-    if (t_intermediate_2 - t_intermediate > frontier_max_time_) frontier_max_time_ = t_intermediate_2 - t_intermediate;
-    RCLCPP_INFO(this->get_logger(), "Frontier update completed in %f seconds (max time: %f seconds)",
-                t_intermediate_2 - t_intermediate, frontier_max_time_);
+    double t2_frontier_update = this->now().seconds();
+
+    // --------------------------------------------------------------------------------
+
+    RCLCPP_INFO(this->get_logger(), "Computing cost matrix for global planning.");
+
+    double t1_cost_matrix = this->now().seconds();
 
     // Get cost matrix for current state and clusters
     Eigen::MatrixXd cost_mat;
-    RCLCPP_INFO(this->get_logger(), "Updating frontier cost matrix");
     frontier_finder_->updateFrontierCostMatrix();
-    frontier_finder_->getFullCostMatrix(hippo_position_, hippo_velocity_, hippo_yaw_, cost_mat);
+    frontier_finder_->getFullCostMatrix(hippo_position, hippo_velocity, hippo_yaw, cost_mat);
 
-    t_intermediate = this->now().seconds();
-    std_msgs::msg::Float64 cost_matrix_time_msg;
-    cost_matrix_time_msg.data = t_intermediate - t_intermediate_2;
-    publisher_cost_matrix_time_->publish(cost_matrix_time_msg);
-    RCLCPP_INFO(this->get_logger(), "New cost matrix computed in %f seconds.",
-        t_intermediate - t_intermediate_2);
-
-    // Make a cluster_indexer to access the frontier list easier
+    // Make a cluster_indexer to access the frontier list easier at later stages
     std::list<FrontierCluster> frontier_clusters = frontier_finder_->getFrontierClusters();
     std::vector<std::list<FrontierCluster>::iterator> cluster_indexer;
     for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
         cluster_indexer.push_back(it);
 
-    // Publish the frontiers
-    publishFrontierStatus(frontier_clusters);
+    double t2_cost_matrix = this->now().seconds();
 
-    // Print the cost matrix
-    RCLCPP_INFO(this->get_logger(), "Cost matrix is of dimension: [%zux%zu]",
-                cost_mat.rows(), cost_mat.cols());
-    /*
-    for (int i = 0; i < cost_mat.rows(); ++i) {
-        std::ostringstream oss;
-        for (int j = 0; j < cost_mat.cols(); ++j) {
-            if (j > 0) oss << ",";
-            oss << cost_mat(i, j);
-        }
-        std::string result = oss.str();
-        RCLCPP_INFO(this->get_logger(), "Row %d: [%s]", i, result.c_str());
-    }
-    */
+    // --------------------------------------------------------------------------------
 
-    t_intermediate_2 = this->now().seconds();
-    std_msgs::msg::Float64 publish_frontiers_time_msg;
-    publish_frontiers_time_msg.data = t_intermediate_2 - t_intermediate;
-    publisher_publish_frontiers_time_->publish(publish_frontiers_time_msg);
-    RCLCPP_INFO(this->get_logger(), "Frontier status published in %f seconds.",
-        t_intermediate_2 - t_intermediate);  
+    RCLCPP_INFO(this->get_logger(), "Computing global tour.");
+
+    double t1_global_tour = this->now().seconds();
     
     // Compute the global tour (i.e. the order in which to visit the clusters)
     std::vector<int> tour;
     findGlobalTour(tour, cost_mat);
 
-    // Print the global tour
-    std::ostringstream tour_oss;
-    for (size_t i = 0; i < tour.size(); ++i) {
-        if (i > 0) tour_oss << ",";
-        tour_oss << tour[i];
-    }
-    std::string tour_result = tour_oss.str();
-    RCLCPP_INFO(this->get_logger(), "Tour: [%s]", tour_result.c_str());
-
     if (tour.size() < 1)
         return NO_TOUR;
 
-    t_intermediate = this->now().seconds();
+    double t2_global_tour = this->now().seconds();
 
-    // Get the path connecting the viewpoints in the tour
-    path_astar_params_.max_search_time = max_search_time_local_;
-    ViewNode::astar_->setParams(path_astar_params_);
+    // --------------------------------------------------------------------------------
 
-    std::vector<Eigen::Vector2d> path;
-    frontier_finder_->getPathForTour(hippo_position_, tour, path);
-    RCLCPP_INFO(this->get_logger(), "Global path has %zu points.", path.size());
+    RCLCPP_INFO(this->get_logger(), "Finding target viewpoint.");
 
-    t_intermediate_2 = this->now().seconds();
-    RCLCPP_INFO(this->get_logger(), "Global path computation completed in %f seconds",
-                t_intermediate_2 - t_intermediate);
-                
-    t_intermediate = this->now().seconds();
+    double t1_local_refine = this->now().seconds();
 
-    // Find the target position and yaw for trajectory planning
+    // Find the target viewpoint (position and yaw) for trajectory planning
     Eigen::Vector2d next_pos;
     double next_yaw;
+
+    path_astar_params_.max_search_time = max_search_time_local_;
+    ViewNode::astar_params_ = path_astar_params_;
 
     // Refine the local tour if the flag is enabled
     std::vector<Eigen::Vector2d> refined_points;
@@ -429,7 +402,7 @@ int PathPlanningManager::pathPlanningCallback() {
         // Additionally, check the distance from the current hippo position and stop
         // adding clusters if the cluster centroid is too far away.
         for (int i = 0; i < k_num; ++i) {
-            if ((cluster_indexer[tour[i]]->average_pos_ - hippo_position_).norm()
+            if ((cluster_indexer[tour[i]]->average_pos_ - hippo_position).norm()
                     > refine_radius_) break;
             refined_ids.push_back(tour[i]);
         }
@@ -453,8 +426,8 @@ int PathPlanningManager::pathPlanningCallback() {
             // the maximum number of viewpoints is also considered (refine_num_viewpoints_).
             std::vector<std::vector<Eigen::Vector2d>> n_points;
             std::vector<std::vector<double>> n_yaws;
-            frontier_finder_->getViewpointsInfo(hippo_position_,
-                                                hippo_yaw_,
+            frontier_finder_->getViewpointsInfo(hippo_position,
+                                                hippo_yaw,
                                                 refined_ids,
                                                 refine_num_viewpoints_vec,
                                                 refine_max_decay_,
@@ -462,9 +435,9 @@ int PathPlanningManager::pathPlanningCallback() {
                                                 n_yaws);
 
             // Calculate the refined positions and yaws
-            refineLocalTour(hippo_position_,
-                            hippo_velocity_,
-                            hippo_yaw_,
+            refineLocalTour(hippo_position,
+                            hippo_velocity,
+                            hippo_yaw,
                             n_points,
                             n_yaws,
                             refined_points,
@@ -472,13 +445,6 @@ int PathPlanningManager::pathPlanningCallback() {
 
             next_pos = refined_points.front();
             next_yaw = refined_yaws.front();
-
-            t_intermediate_2 = this->now().seconds();
-            std_msgs::msg::Float64 refinement_time_msg;
-            refinement_time_msg.data = t_intermediate_2 - t_intermediate;
-            publisher_refinement_time_->publish(refinement_time_msg);
-            RCLCPP_INFO(this->get_logger(), "Tour refinement completed in %f seconds",
-                t_intermediate_2 - t_intermediate);
         } else {
             // If no clusters are available for refinement,
             // fall back to the top viewpoint of the first cluster
@@ -493,9 +459,11 @@ int PathPlanningManager::pathPlanningCallback() {
         next_yaw = cluster_indexer[tour.front()]->viewpoints_.front().yaw_;
     }
 
-    /*
-    Publish everything
-    */
+    double t2_local_refine = this->now().seconds();
+
+    // --------------------------------------------------------------------------------
+
+    // Publish targets for trajectory generation
 
     // Publish the target position of the next viewpoint
     geometry_msgs::msg::Vector3Stamped target_pos_msg;
@@ -511,10 +479,30 @@ int PathPlanningManager::pathPlanningCallback() {
     target_yaw_msg.data = next_yaw;
     publisher_yaw_target_->publish(target_yaw_msg);
 
-    // Publish frontier markers for rviz
-    publishPathplanningStatus(path, next_pos, next_yaw, refined_points);
+    // --------------------------------------------------------------------------------
+
+    // Store data for visualization
+    {
+        std::lock_guard<std::mutex> lock(viz_mutex_);
+        frontier_clusters_ = frontier_clusters;
+        removed_cluster_ids_ = removed_cluster_ids;
+        cost_mat_ = cost_mat;
+        tour_ = tour;
+        next_pos_ = next_pos;
+        next_yaw_ = next_yaw;
+        refined_points_ = refined_points;
+
+        t_data_acquire_ = t2_data_acquire - t1_data_acquire;
+        t_frontier_update_ = t2_frontier_update - t1_frontier_update;
+        t_cost_matrix_ = t2_cost_matrix - t1_cost_matrix;
+        t_global_tour_ = t2_global_tour - t1_global_tour;
+        t_local_refine_ = t2_local_refine - t1_local_refine;
+    }
+
+    // --------------------------------------------------------------------------------
 
     double t2 = this->now().seconds();
+
     std_msgs::msg::Float64 path_planning_time_msg;
     path_planning_time_msg.data = t2 - t1;
     publisher_path_planning_time_->publish(path_planning_time_msg);
@@ -523,6 +511,8 @@ int PathPlanningManager::pathPlanningCallback() {
     }
     RCLCPP_INFO(this->get_logger(), "Path planning completed in %f seconds (max time: %f seconds)",
         t2 - t1, pathplanning_max_time_);
+
+    path_planning_active_ = true;
 
     return SUCCEED;
 }
@@ -660,7 +650,7 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
     // cluster) and has the lowest cost.
     std::vector<ViewNode::Ptr> path;
     double t1 = this->now().seconds();
-    g_search.FullDijkstraSearch(first->id_, path);
+    g_search.FullDijkstraSearchMod(first->id_, path);
     double t2 = this->now().seconds();
     if (t2-t1 > dijkstra_max_time_) dijkstra_max_time_ = t2-t1;
     RCLCPP_INFO(this->get_logger(), "Dijkstra search completed in %f seconds (max time: %f seconds)",
@@ -675,8 +665,10 @@ void PathPlanningManager::refineLocalTour(const Eigen::Vector2d& cur_pos,
 
 void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
     // Get position and yaw
-    hippo_position_ << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
-    hippo_yaw_ = tf2::getYaw(odometry_msg->pose.pose.orientation);
+    Eigen::Vector2d hippo_position;
+    double hippo_yaw;
+    hippo_position << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
+    hippo_yaw = tf2::getYaw(odometry_msg->pose.pose.orientation);
 
     // Get velocity in the child frame and transform it to the map frame
     geometry_msgs::msg::Vector3Stamped velocity_child;
@@ -705,7 +697,15 @@ void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::Shared
     geometry_msgs::msg::Vector3Stamped velocity_map;
     tf2::doTransform(velocity_child, velocity_map, transform);
 
-    hippo_velocity_ << velocity_map.vector.x, velocity_map.vector.y;
+    Eigen::Vector2d hippo_velocity;
+    hippo_velocity << velocity_map.vector.x, velocity_map.vector.y;
+
+    {
+        std::lock_guard<std::mutex> lock(hippo_state_mutex_);
+        hippo_position_ = hippo_position;
+        hippo_velocity_ = hippo_velocity;
+        hippo_yaw_ = hippo_yaw;
+    }
 
     if (!odometry_received_) {
         RCLCPP_INFO(this->get_logger(), "Odometry received by path planner for the first time.");
@@ -715,8 +715,128 @@ void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::Shared
     visualization_msgs::msg::Marker marker_velocity;
     marker_velocity.header.frame_id = "map";
     marker_velocity.header.stamp = this->now();
-    vis_utils_->drawVelocity(marker_velocity, hippo_position_, hippo_velocity_);
+    vis_utils_->drawVelocity(marker_velocity, hippo_position, hippo_velocity);
     publisher_velocity_->publish(marker_velocity);
+}
+
+void PathPlanningManager::publishRvizAndInfo() {
+    if (!path_planning_active_) {
+        return;
+    }
+
+    // Get the data to be published
+    std::list<FrontierCluster> frontier_clusters;
+    std::vector<int> removed_cluster_ids;
+    Eigen::MatrixXd cost_mat;
+    std::vector<int> tour;
+    Eigen::Vector2d next_pos;
+    double next_yaw;
+    std::vector<Eigen::Vector2d> refined_points;
+    
+    double t_data_acquire;
+    double t_frontier_update;
+    double t_cost_matrix;
+    double t_global_tour;
+    double t_local_refine;
+    {
+        std::lock_guard<std::mutex> lock(viz_mutex_);
+        frontier_clusters = frontier_clusters_;
+        removed_cluster_ids = removed_cluster_ids_;
+        cost_mat = cost_mat_;
+        tour = tour_;
+        next_pos = next_pos_;
+        next_yaw = next_yaw_;
+        refined_points = refined_points_;
+
+        t_data_acquire = t_data_acquire_;
+        t_frontier_update = t_frontier_update_;
+        t_cost_matrix = t_cost_matrix_;
+        t_global_tour = t_global_tour_;
+        t_local_refine = t_local_refine_;
+    }
+
+    // Publish info and visualization
+
+    // Frontier info
+
+    std::string removed_info = "Removed cluster IDs: ";
+    for (int removed_id : removed_cluster_ids) {
+        std::ostringstream oss;
+        oss << removed_id;
+        if (removed_id != removed_cluster_ids.back()) oss << ",";
+        removed_info += oss.str();
+    }
+    RCLCPP_INFO(this->get_logger(), "%s", removed_info.c_str());
+
+    publishFrontierStatus(frontier_clusters);
+
+    // Cost matrix
+
+    RCLCPP_INFO(this->get_logger(), "Cost matrix is of dimension: [%zux%zu]",
+                cost_mat.rows(), cost_mat.cols());
+    /*
+    for (int i = 0; i < cost_mat.rows(); ++i) {
+        std::ostringstream oss;
+        for (int j = 0; j < cost_mat.cols(); ++j) {
+            if (j > 0) oss << ",";
+            oss << cost_mat(i, j);
+        }
+        std::string result = oss.str();
+        RCLCPP_INFO(this->get_logger(), "Row %d: [%s]", i, result.c_str());
+    }
+    */
+
+    // Global tour
+
+    std::ostringstream tour_oss;
+    for (size_t i = 0; i < tour.size(); ++i) {
+        if (i > 0) tour_oss << ",";
+        tour_oss << tour[i];
+    }
+    std::string tour_result = tour_oss.str();
+    RCLCPP_INFO(this->get_logger(), "Global tour: [%s]", tour_result.c_str());
+
+    // Get the path connecting the viewpoints in the tour
+    std::vector<std::list<FrontierCluster>::iterator> indexer;
+    for (auto it = frontier_clusters.begin(); it != frontier_clusters.end(); ++it)
+        indexer.push_back(it);
+
+    std::vector<Eigen::Vector2d> path;
+    path.push_back(hippo_position_);
+    
+    for (int i = 0; i < tour.size() - 1; ++i) {
+        // Move to path to next cluster
+        auto path_iter = indexer[tour[i]]->paths_.begin();
+        int next_idx = tour[i + 1];
+        for (int j = 0; j < next_idx; ++j) {
+            ++path_iter;
+        }
+        path.insert(path.end(), path_iter->begin(), path_iter->end());
+    }
+
+    publishPathplanningStatus(path, next_pos, next_yaw, refined_points);
+
+    // Update times
+
+    std_msgs::msg::Float64 data_acquire_time_msg;
+    data_acquire_time_msg.data = t_data_acquire;
+    publisher_data_acquire_time_->publish(data_acquire_time_msg);
+
+    std_msgs::msg::Float64 frontier_update_time_msg;
+    frontier_update_time_msg.data = t_frontier_update;
+    publisher_frontier_update_time_->publish(frontier_update_time_msg);
+
+    std_msgs::msg::Float64 cost_matrix_time_msg;
+    cost_matrix_time_msg.data = t_cost_matrix;
+    publisher_cost_matrix_time_->publish(cost_matrix_time_msg);
+
+    std_msgs::msg::Float64 global_tour_time_msg;
+    global_tour_time_msg.data = t_global_tour;
+    publisher_global_tour_time_->publish(global_tour_time_msg);
+
+    std_msgs::msg::Float64 refinement_time_msg;
+    refinement_time_msg.data = t_local_refine;
+    publisher_refinement_time_->publish(refinement_time_msg);
 }
 
 void PathPlanningManager::publishFrontierStatus(const std::list<FrontierCluster> & frontier_clusters,
