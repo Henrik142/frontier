@@ -21,6 +21,8 @@
       esdf_default_dist: 1.0
       esdf_optimistic: false
       esdf_signed_dist: false
+      num_maps: 2
+      chunk_size: 200
     frontier:
       update_inflation_size: 0.2
       cluster_max_radius: 0.5

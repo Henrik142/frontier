@@ -7,6 +7,45 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     map_->initMap(map_params_);
     map_builder_.reset(new MapBuilder(map_.get()));
 
+    int hippo_id = std::stoi(vehicle_name_.substr(vehicle_name_.size() - 2));
+    RCLCPP_INFO(this->get_logger(), "hippo_id=%d", hippo_id);
+
+    multi_map_manager_.reset(new MultiMapManager());
+    multi_map_manager_->init(hippo_id, num_maps_, chunk_size_);
+    multi_map_manager_->setMap(map_);
+
+    /*What do we need to call?
+
+    -------- cb_group_main_ ----------
+
+    updateMapChunk
+    - call after inputPointCloud
+    - Forms new chunks from observed voxels
+    - operates on: adr_buffer_, multi_map_chunks_
+
+    processChunkBuffer
+    - call at fixed frequency
+    - Processes messages from the buffer to update this robot's map
+    - operates on: chunk_buffer_, buffer_map_, multi_map_chunks_, map_, chunk_boxes_
+                      
+    sendStamp
+    - call at fixed frequency
+    - Tells other robots which chunks this robot knows about
+    - operates on: multi_map_chunks_
+
+    receiveStamp
+    - callback when receiving stamp message (subscription)
+    - Checks which chunks other robots know about, and sends chunks that other robots don't know about yet
+    - operates on: multi_map_chunks_, map_
+    - only operates on the map_ to read the occupancy information
+
+    receiveChunk
+    - callback when receiving chunk message (subscription)
+    - Adds chunk messages to the internal buffer for later processing
+    - operates on: chunk_buffer_, buffer_map_
+    
+    */
+
     vis_utils_.reset(new VisualizationUtils());
     vis_utils_->initVisUtils(fov_params_);
 
@@ -19,16 +58,33 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     publisher_distance_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/distance", 10);
     publisher_map_update_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/map_update", 10);
 
+    publisher_chunk_stamps_ = this->create_publisher<environment_map_msgs::msg::ChunkStamps>(
+            "/multi_map_manager/chunk_stamps", rclcpp::QoS(1).transient_local());
+    publisher_chunk_data_ = this->create_publisher<environment_map_msgs::msg::ChunkData>(
+            "/multi_map_manager/chunk_data", rclcpp::QoS(1).transient_local());
+
     // Initialize two mutually exclusive callback groups that enable concurrent callbacks
-    cb_group_sub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_main_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cb_group_pub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     // Create point cloud and odometry subscriptions
     rclcpp::SubscriptionOptions sub_options;
-    sub_options.callback_group = cb_group_sub_;
+    sub_options.callback_group = cb_group_main_;
 
     subscription_pc_.subscribe(this, "map_pointcloud", rmw_qos_profile_default, sub_options);
     subscription_odometry_.subscribe(this, "odometry", rmw_qos_profile_default, sub_options);
+
+    subscription_chunk_stamps_ = this->create_subscription<environment_map_msgs::msg::ChunkStamps>(
+        "/multi_map_manager/chunk_stamps",
+        rclcpp::QoS(1).transient_local(),
+        std::bind(&MapUpdater::chunkStampsCallback, this, std::placeholders::_1),
+        sub_options);
+
+    subscription_chunk_data_ = this->create_subscription<environment_map_msgs::msg::ChunkData>(
+        "/multi_map_manager/chunk_data",
+        rclcpp::QoS(1).transient_local(),
+        std::bind(&MapUpdater::chunkDataCallback, this, std::placeholders::_1),
+        sub_options);
 
     // Create a synced callback that is called when there is a new point cloud and odometry message available
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
@@ -41,6 +97,18 @@ MapUpdater::MapUpdater() : Node("map_updater") {
         std::chrono::milliseconds(50),
         std::bind(&MapUpdater::publishMap, this),
         cb_group_pub_);
+
+    // Create a timer for sending chunk stamps
+    send_stamp_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(100),
+        std::bind(&MapUpdater::sendChunkStamps, this),
+        cb_group_main_);
+
+    // Create a timer for processing the chunk buffer
+    process_chunk_buffer_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(100),
+        std::bind(&MapUpdater::processChunkBufferCallback, this),
+        cb_group_main_);
 
     RCLCPP_INFO(this->get_logger(), "Node started");
 }
@@ -65,6 +133,8 @@ void MapUpdater::initPlanningMaps(const std::shared_ptr<PlanningMaps> & planning
 }
 
 void MapUpdater::initParams() {
+    vehicle_name_ = declare_parameter<std::string>("vehicle_name", "");
+
     // FOV parameters
     declare_parameter<double>("fov.offset_x", 0.2);
     declare_parameter<double>("fov.offset_y", 0.0);
@@ -101,6 +171,8 @@ void MapUpdater::initParams() {
     declare_parameter<double>("map.esdf_default_dist", 1.0);
     declare_parameter<bool>("map.esdf_optimistic", false);
     declare_parameter<bool>("map.esdf_signed_dist", false);
+    declare_parameter<int>("map.num_maps", 2);
+    declare_parameter<int>("map.chunk_size", 200);
 
     map_params_.xsize = get_parameter("map.xsize").as_double();
     RCLCPP_INFO(get_logger(), "map.xsize=%f", map_params_.xsize);
@@ -134,6 +206,11 @@ void MapUpdater::initParams() {
 
     map_params_.max_ray_length = fov_params_.max_dist;
     RCLCPP_INFO(get_logger(), "map.max_ray_length=%f", map_params_.max_ray_length);
+
+    num_maps_ = get_parameter("map.num_maps").as_int();
+    RCLCPP_INFO(get_logger(), "map.num_maps=%d", num_maps_);
+    chunk_size_ = get_parameter("map.chunk_size").as_int();
+    RCLCPP_INFO(get_logger(), "map.chunk_size=%d", chunk_size_);
 }
 
 void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg, 
@@ -180,9 +257,16 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     // RCLCPP_INFO(this->get_logger(), "Camera position: x=%f, y=%f", camera_position.x(), camera_position.y());
     
     if (map_->getOccupancy(camera_position) == Map::FREE) {
+        // Check if the updated box needs to be reset. Each time the main loop of the path planning manager
+        // runs, this is true. So basically this means: If the path planning manager main loop ran at least once
+        // since the last point cloud update, then reset the updated box. Otherwise, don't reset it.
         bool reset_updated_box = planning_maps_->getResetUpdatedBox(false);
-        map_->inputPointCloud(*cloud, cloud->size(), camera_position, reset_updated_box);
-        // RCLCPP_INFO(this->get_logger(), "Point cloud input complete.");
+        
+        std::vector<int> updated_adrs;
+        map_->inputPointCloud(*cloud, cloud->size(), camera_position, reset_updated_box, updated_adrs);
+        
+        std::vector<uint32_t> unsigned_adrs(updated_adrs.begin(), updated_adrs.end());
+        multi_map_manager_->updateMapChunk(unsigned_adrs);
     } else {
         RCLCPP_WARN(this->get_logger(), "Camera position is not in free space, skipping point cloud input.");
         return;
@@ -257,4 +341,27 @@ void MapUpdater::publishMap() {
 
     double t2 = this->now().seconds();
     RCLCPP_INFO(this->get_logger(), "Map publishing completed in %f seconds", t2 - t1);
+}
+
+void MapUpdater::sendChunkStamps() {
+    environment_map_msgs::msg::ChunkStamps chunk_stamps_msg;
+    double time = this->now().seconds();
+    multi_map_manager_->sendStamp(time, chunk_stamps_msg);
+    publisher_chunk_stamps_->publish(chunk_stamps_msg);
+}
+
+void MapUpdater::chunkStampsCallback(const environment_map_msgs::msg::ChunkStamps::SharedPtr msg) {
+    std::vector<environment_map_msgs::msg::ChunkData> chunk_data_msgs;
+    multi_map_manager_->receiveStamp(*msg, chunk_data_msgs);
+    for (const auto & chunk_data_msg : chunk_data_msgs) {
+        publisher_chunk_data_->publish(chunk_data_msg);
+    }
+}
+
+void MapUpdater::chunkDataCallback(const environment_map_msgs::msg::ChunkData::SharedPtr msg) {
+    multi_map_manager_->receiveChunk(*msg);
+}
+
+void MapUpdater::processChunkBufferCallback() {
+    multi_map_manager_->processChunkBuffer(map_params_.obstacles_inflation_radius);
 }

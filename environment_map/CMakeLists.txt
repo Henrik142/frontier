@@ -8,11 +8,13 @@ find_package(pcl_conversions REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 set(PCL_DIR "/usr/lib/x86_64-linux-gnu/cmake/pcl")
 find_package(PCL REQUIRED)
+find_package(environment_map_msgs REQUIRED)
 
 add_library(environment_map STATIC
   src/map.cpp
   src/raycast.cpp
   src/map_builder.cpp
+  src/multi_map_manager.cpp
 )
 
 target_include_directories(environment_map PUBLIC
@@ -29,6 +31,7 @@ ament_target_dependencies(environment_map
   Eigen3
   Boost
   PCL
+  environment_map_msgs
 )
 
 install(
@@ -45,5 +48,5 @@ install(
 )
 
 ament_export_targets(environment_mapTargets HAS_LIBRARY_TARGET)
-ament_export_dependencies(Eigen3 Boost PCL pcl_conversions)
+ament_export_dependencies(Eigen3 Boost PCL pcl_conversions environment_map_msgs)
 ament_package()

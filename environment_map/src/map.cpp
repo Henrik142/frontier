@@ -127,6 +127,12 @@ int Map::toAddress(const Eigen::Vector2i& id) const {
   return toAddress(id[0], id[1]);
 }
 
+void Map::adrToIndex(const int& adr, Eigen::Vector2i& id) const {
+  int X = getVoxelNumX();
+  id(0) = adr % X;
+  id(1) = adr / X;
+}
+
 bool Map::isInMap(const Eigen::Vector2d& pos) const {
   if (pos(0) < mp_->map_min_boundary_(0) + 1e-4 || pos(1) < mp_->map_min_boundary_(1) + 1e-4)
     return false;
@@ -144,16 +150,22 @@ bool Map::isInMap(const Eigen::Vector2i& idx) const {
 
 int Map::getOccupancy(const Eigen::Vector2i& id) const {
   if (!isInMap(id)) return -1;
-  double occ = md_->occupancy_buffer_[toAddress(id)];
-  if (occ < mp_->clamp_min_log_ - 1e-3) return UNKNOWN;
-  if (occ > mp_->min_occupancy_log_) return OCCUPIED;
-  return FREE;
+  int adr = toAddress(id);
+  return getOccupancy(adr);
 }
 
 int Map::getOccupancy(const Eigen::Vector2d& pos) const {
   Eigen::Vector2i id;
   posToIndex(pos, id);
   return getOccupancy(id);
+}
+
+int Map::getOccupancy(const int& adr) const {
+  if (adr < 0 || adr >= getVoxelNum()) return -1;
+  double occ = md_->occupancy_buffer_[adr];
+  if (occ < mp_->clamp_min_log_ - 1e-3) return UNKNOWN;
+  if (occ > mp_->min_occupancy_log_) return OCCUPIED;
+  return FREE;
 }
 
 int Map::getInflatedOccupancy(const Eigen::Vector2i& id) const {
@@ -224,6 +236,12 @@ void Map::setOccupancy(const Eigen::Vector2i& id, int occ) {
   else if (occ == OCCUPIED) setOccupancyValue(id, mp_->clamp_max_log_);
 }
 
+void Map::setOccupancy(const int& adr, int occ) {
+  if (occ == UNKNOWN) md_->occupancy_buffer_[adr] = mp_->clamp_min_log_ - mp_->unknown_flag_;
+  else if (occ == FREE) md_->occupancy_buffer_[adr] = mp_->clamp_min_log_;
+  else if (occ == OCCUPIED) md_->occupancy_buffer_[adr] = mp_->clamp_max_log_;
+}
+
 void Map::setOccupancyValue(const Eigen::Vector2i& id, double occ) {
   if (!isInMap(id)) return;
   md_->occupancy_buffer_[toAddress(id)] = occ;
@@ -284,7 +302,8 @@ void Map::fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
 }
 
 void Map::inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, const int& point_num,
-                          const Eigen::Vector2d& camera_pos, bool reset_updated_box)
+                          const Eigen::Vector2d& camera_pos, bool reset_updated_box,
+                          std::vector<int>& updated_adrs)
 {
   // takes an XYZ point cloud as input, but ignores z (2D map)
   // the points are expected to be expressed in the map/world coordinate frame
@@ -377,6 +396,7 @@ void Map::inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, con
   // Go through all cached voxels and update their occupancy based on hit/miss counts
   while (!md_->cache_voxel_.empty()) {
     int adr = md_->cache_voxel_.front();
+    int occ_before = getOccupancy(adr);
     md_->cache_voxel_.pop();
 
     // Compute the log-odds update for this voxel based on hit/miss counts
@@ -393,6 +413,10 @@ void Map::inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, con
     md_->occupancy_buffer_[adr] = std::min(
         std::max(md_->occupancy_buffer_[adr] + log_odds_update, mp_->clamp_min_log_),
         mp_->clamp_max_log_);
+
+    if (getOccupancy(adr) != occ_before) {
+      updated_adrs.push_back(adr);
+    }
   }
 
 }
@@ -481,6 +505,17 @@ void Map::inflateObstacles() {
         }
     }
   }
+}
+
+void Map::setInflatedOccupancy(const int& adr, int occ) {
+  if (adr >= 0 && adr < md_->occupancy_buffer_inflate_.size()) {
+    md_->occupancy_buffer_inflate_[adr] = occ;
+  }
+}
+
+void Map::setInflatedOccupancy(const Eigen::Vector2i& id, int occ) {
+  int adr = toAddress(id);
+  setInflatedOccupancy(adr, occ);
 }
 
 void Map::inflatePoint(const Eigen::Vector2i& pt, const double inflation_radius,

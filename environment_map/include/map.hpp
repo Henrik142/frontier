@@ -53,10 +53,12 @@ public:
   void indexToPos(const Eigen::Vector2i& id, Eigen::Vector2d& pos) const;
   int toAddress(const Eigen::Vector2i& id) const;
   int toAddress(const int& x, const int& y) const;
+  void adrToIndex(const int& adr, Eigen::Vector2i& id) const;
   bool isInMap(const Eigen::Vector2d& pos) const;
   bool isInMap(const Eigen::Vector2i& idx) const;
   int getOccupancy(const Eigen::Vector2d& pos) const;
   int getOccupancy(const Eigen::Vector2i& id) const;
+  int getOccupancy(const int& adr) const;
   int getInflatedOccupancy(const Eigen::Vector2d& pos) const;
   int getInflatedOccupancy(const Eigen::Vector2i& id) const;
   double getDistance(const Eigen::Vector2d& pos) const;
@@ -65,6 +67,7 @@ public:
 
   void setOccupancy(const Eigen::Vector2d& pos, int occ);
   void setOccupancy(const Eigen::Vector2i& id, int occ);
+  void setOccupancy(const int& adr, int occ);
 
   void getMapBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
   void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset);
@@ -76,9 +79,14 @@ public:
   void fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
 
   void inputPointCloud(const pcl::PointCloud<pcl::PointXYZ>& point_cloud, const int& point_num,
-                       const Eigen::Vector2d& camera_pos, bool reset_updated_box);
+                       const Eigen::Vector2d& camera_pos, bool reset_updated_box,
+                       std::vector<int>& updated_adrs);
 
   void inflateObstacles();
+  void setInflatedOccupancy(const int& adr, int occ);
+  void setInflatedOccupancy(const Eigen::Vector2i& id, int occ);
+  void inflatePoint(const Eigen::Vector2i& pt, const double inflation_radius,
+                    std::vector<Eigen::Vector2i>& pts);
 
   void updateESDF2d();
 
@@ -91,9 +99,7 @@ private:
   void setOccupancyValue(const Eigen::Vector2i& id, double occ);
   Eigen::Vector2d closestPointInMap(const Eigen::Vector2d& pt, const Eigen::Vector2d& camera_pt);
   void setCacheOccupancy(const int& adr, const int& occ);
-  void inflatePoint(const Eigen::Vector2i& pt, const double inflation_radius,
-                    std::vector<Eigen::Vector2i>& pts);
-
+  
   template <typename F_get_val, typename F_set_val>
   void fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int end, int dim);
 
