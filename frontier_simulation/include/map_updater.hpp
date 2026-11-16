@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <mutex>
 
 #include "map.hpp"
 #include "multi_map_manager.hpp"
@@ -60,6 +61,8 @@ private:
 
     rclcpp::CallbackGroup::SharedPtr cb_group_main_;
     rclcpp::CallbackGroup::SharedPtr cb_group_pub_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_chunks_;
+    
     rclcpp::TimerBase::SharedPtr publish_timer_;
     rclcpp::TimerBase::SharedPtr send_stamp_timer_;
     rclcpp::TimerBase::SharedPtr process_chunk_buffer_timer_;
@@ -77,8 +80,11 @@ private:
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr publisher_map_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_updated_box_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_distance_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_chunk_boxes_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr publisher_chunk_cells_;
 
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_map_update_time_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_map_update_rate_;
 
     // Params
     std::string vehicle_name_;
@@ -98,9 +104,16 @@ private:
     std::shared_ptr<PlanningMaps> planning_maps_;
     std::shared_ptr<std::atomic_bool> map_ready_ = std::make_shared<std::atomic_bool>(false);
 
+    // Mutex
+    std::mutex map_mutex_;
+    std::mutex multi_map_manager_mutex_;
+
     // Initialization flags
     bool init_box_discovered_ = false;
 
+    bool chunks_inserted_ = false;
+
     // Time values
     double update_max_time_ = 0.0;
+    double last_update_ = 0.0;
 };

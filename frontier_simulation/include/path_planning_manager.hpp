@@ -190,5 +190,5 @@ private:
     bool init_rotation_halfway_ = false;
     bool init_rotation_finished_ = false;
     bool path_planning_initialized_ = false;
-    bool path_planning_active_ = false;
+    bool path_planning_step_completed_ = false;
 };

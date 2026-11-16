@@ -55,6 +55,9 @@ public:
     void drawVelocity(visualization_msgs::msg::Marker & marker_velocity,
         const Eigen::Vector2d & position,
         const Eigen::Vector2d & velocity);
+    void highlightCells(visualization_msgs::msg::Marker & marker_cells,
+                        const std::vector<int> & cell_adrs,
+                        const Map & map);
         
 private:
     void createFOVMarkers(visualization_msgs::msg::Marker& marker_fov, 

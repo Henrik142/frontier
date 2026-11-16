@@ -14,7 +14,8 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     multi_map_manager_->init(hippo_id, num_maps_, chunk_size_);
     multi_map_manager_->setMap(map_);
 
-    /*What do we need to call?
+    /*
+    What do we need to call?
 
     -------- cb_group_main_ ----------
 
@@ -22,6 +23,8 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     - call after inputPointCloud
     - Forms new chunks from observed voxels
     - operates on: adr_buffer_, multi_map_chunks_
+
+    -------- cb_group_chunks_ ----------
 
     processChunkBuffer
     - call at fixed frequency
@@ -43,6 +46,11 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     - callback when receiving chunk message (subscription)
     - Adds chunk messages to the internal buffer for later processing
     - operates on: chunk_buffer_, buffer_map_
+
+
+    What needs to be protected by the callback groups?
+    - map_
+    - multi_map_manager_
     
     */
 
@@ -56,7 +64,10 @@ MapUpdater::MapUpdater() : Node("map_updater") {
             "occupancy_grid", rclcpp::QoS(1).transient_local());
     publisher_updated_box_ = this->create_publisher<visualization_msgs::msg::Marker>("sensor_updated_box", 10);
     publisher_distance_ = this->create_publisher<visualization_msgs::msg::Marker>("frontier/distance", 10);
+    publisher_chunk_boxes_ = this->create_publisher<visualization_msgs::msg::Marker>("chunk_boxes", 10);
+    publisher_chunk_cells_ = this->create_publisher<visualization_msgs::msg::Marker>("chunk_cells", 10);
     publisher_map_update_time_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/map_update", 10);
+    publisher_map_update_rate_ = this->create_publisher<std_msgs::msg::Float64>("frontier/times/map_update_rate", 10);
 
     publisher_chunk_stamps_ = this->create_publisher<environment_map_msgs::msg::ChunkStamps>(
             "/multi_map_manager/chunk_stamps", rclcpp::QoS(1).transient_local());
@@ -66,31 +77,36 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     // Initialize two mutually exclusive callback groups that enable concurrent callbacks
     cb_group_main_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cb_group_pub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_chunks_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     // Create point cloud and odometry subscriptions
-    rclcpp::SubscriptionOptions sub_options;
-    sub_options.callback_group = cb_group_main_;
+    rclcpp::SubscriptionOptions sub_options_main;
+    sub_options_main.callback_group = cb_group_main_;
 
-    subscription_pc_.subscribe(this, "map_pointcloud", rmw_qos_profile_default, sub_options);
-    subscription_odometry_.subscribe(this, "odometry", rmw_qos_profile_default, sub_options);
-
-    subscription_chunk_stamps_ = this->create_subscription<environment_map_msgs::msg::ChunkStamps>(
-        "/multi_map_manager/chunk_stamps",
-        rclcpp::QoS(1).transient_local(),
-        std::bind(&MapUpdater::chunkStampsCallback, this, std::placeholders::_1),
-        sub_options);
-
-    subscription_chunk_data_ = this->create_subscription<environment_map_msgs::msg::ChunkData>(
-        "/multi_map_manager/chunk_data",
-        rclcpp::QoS(1).transient_local(),
-        std::bind(&MapUpdater::chunkDataCallback, this, std::placeholders::_1),
-        sub_options);
+    subscription_pc_.subscribe(this, "map_pointcloud", rmw_qos_profile_default, sub_options_main);
+    subscription_odometry_.subscribe(this, "odometry", rmw_qos_profile_default, sub_options_main);
 
     // Create a synced callback that is called when there is a new point cloud and odometry message available
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
         SyncPolicy(10), subscription_pc_, subscription_odometry_);
     sync_->registerCallback(std::bind(&MapUpdater::pointCloudCallback, this,
         std::placeholders::_1, std::placeholders::_2));
+
+    // Create subscriptions for chunk stamps and chunk data using the chunks callback group
+    rclcpp::SubscriptionOptions sub_options_chunks;
+    sub_options_chunks.callback_group = cb_group_chunks_;
+
+    subscription_chunk_stamps_ = this->create_subscription<environment_map_msgs::msg::ChunkStamps>(
+        "/multi_map_manager/chunk_stamps",
+        rclcpp::QoS(1).transient_local(),
+        std::bind(&MapUpdater::chunkStampsCallback, this, std::placeholders::_1),
+        sub_options_chunks);
+
+    subscription_chunk_data_ = this->create_subscription<environment_map_msgs::msg::ChunkData>(
+        "/multi_map_manager/chunk_data",
+        rclcpp::QoS(1).transient_local(),
+        std::bind(&MapUpdater::chunkDataCallback, this, std::placeholders::_1),
+        sub_options_chunks);
 
     // Create a timer for publishing the map to Rviz
     publish_timer_ = this->create_wall_timer(
@@ -102,13 +118,13 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     send_stamp_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(100),
         std::bind(&MapUpdater::sendChunkStamps, this),
-        cb_group_main_);
+        cb_group_chunks_);
 
     // Create a timer for processing the chunk buffer
     process_chunk_buffer_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(100),
         std::bind(&MapUpdater::processChunkBufferCallback, this),
-        cb_group_main_);
+        cb_group_chunks_);
 
     RCLCPP_INFO(this->get_logger(), "Node started");
 }
@@ -171,7 +187,7 @@ void MapUpdater::initParams() {
     declare_parameter<double>("map.esdf_default_dist", 1.0);
     declare_parameter<bool>("map.esdf_optimistic", false);
     declare_parameter<bool>("map.esdf_signed_dist", false);
-    declare_parameter<int>("map.num_maps", 2);
+    declare_parameter<int>("team.num_robots", 2);
     declare_parameter<int>("map.chunk_size", 200);
 
     map_params_.xsize = get_parameter("map.xsize").as_double();
@@ -207,8 +223,8 @@ void MapUpdater::initParams() {
     map_params_.max_ray_length = fov_params_.max_dist;
     RCLCPP_INFO(get_logger(), "map.max_ray_length=%f", map_params_.max_ray_length);
 
-    num_maps_ = get_parameter("map.num_maps").as_int();
-    RCLCPP_INFO(get_logger(), "map.num_maps=%d", num_maps_);
+    num_maps_ = get_parameter("team.num_robots").as_int();
+    RCLCPP_INFO(get_logger(), "num_maps=%d", num_maps_);
     chunk_size_ = get_parameter("map.chunk_size").as_int();
     RCLCPP_INFO(get_logger(), "map.chunk_size=%d", chunk_size_);
 }
@@ -217,12 +233,22 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
         const Odometry::ConstSharedPtr & odometry_msg) {
     double t1 = this->now().seconds();
 
+    std::lock_guard<std::mutex> lock(map_mutex_);
+
+    if (last_update_ != 0.0) {
+        std_msgs::msg::Float64 update_rate_msg;
+        update_rate_msg.data = t1 - last_update_;
+        publisher_map_update_rate_->publish(update_rate_msg);
+    }
+    last_update_ = t1;
+
     Eigen::Vector2d robot_position;
     double yaw;
     robot_position << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
     yaw = tf2::getYaw(odometry_msg->pose.pose.orientation);
 
     // "discover" a box around the initial position
+    std::vector<int> init_box_adrs;
     if (!init_box_discovered_) {
         Eigen::Vector2d box_mid_pos;
         box_mid_pos.x() = robot_position.x();
@@ -232,10 +258,17 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
         Eigen::Vector2d box_min_pos = box_mid_pos - 0.5 * Eigen::Vector2d::Ones() * side_length;
         Eigen::Vector2d box_max_pos = box_mid_pos + 0.5 * Eigen::Vector2d::Ones() * side_length;
         map_builder_->setBox(box_min_pos, box_max_pos, Map::FREE);
-        // map_->inflateObstacles();
+       
+        Eigen::Vector2i box_min_idx, box_max_idx;
+        map_->posToIndex(box_min_pos, box_min_idx);
+        map_->posToIndex(box_max_pos, box_max_idx);
+        for (int x = box_min_idx.x(); x <= box_max_idx.x(); ++x) {
+            for (int y = box_min_idx.y(); y <= box_max_idx.y(); ++y) {
+                init_box_adrs.push_back(map_->toAddress(Eigen::Vector2i(x, y)));
+            }
+        }
 
         RCLCPP_INFO(this->get_logger(), "Initialization box set.");
-        init_box_discovered_ = true;
     }
     
     // Convert ROS message to PCL point cloud
@@ -265,7 +298,13 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
         std::vector<int> updated_adrs;
         map_->inputPointCloud(*cloud, cloud->size(), camera_position, reset_updated_box, updated_adrs);
         
+        if (!init_box_adrs.empty()) {
+            updated_adrs.insert(updated_adrs.end(), init_box_adrs.begin(), init_box_adrs.end());
+            init_box_discovered_ = true;
+        }
+
         std::vector<uint32_t> unsigned_adrs(updated_adrs.begin(), updated_adrs.end());
+        std::lock_guard<std::mutex> lock(multi_map_manager_mutex_);
         multi_map_manager_->updateMapChunk(unsigned_adrs);
     } else {
         RCLCPP_WARN(this->get_logger(), "Camera position is not in free space, skipping point cloud input.");
@@ -281,9 +320,12 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     // Store the map data in planning_maps_ so it is available for the pathplanning module
     // as well as for publishing to Rviz
+    if (chunks_inserted_) map_->setNewChunksPublished(true);
     if (planning_maps_->publish(*map_)) {
         RCLCPP_INFO(this->get_logger(), "Map written to planning maps.");
+        chunks_inserted_ = false;
     } else {
+        map_->setNewChunksPublished(false);
         RCLCPP_WARN(this->get_logger(), "Failed to write map to planning maps.");
         return;
     }
@@ -314,7 +356,7 @@ void MapUpdater::publishMap() {
     grid_msg.header.stamp = this->now();
     grid_msg.header.frame_id = "map";
 
-    bool show_inflation = false;
+    bool show_inflation = true;
     vis_utils_->drawMap(grid_msg, *map_snapshot, show_inflation);
 
     publisher_map_->publish(grid_msg);
@@ -344,24 +386,73 @@ void MapUpdater::publishMap() {
 }
 
 void MapUpdater::sendChunkStamps() {
+    RCLCPP_INFO(this->get_logger(), "Sending chunk stamps.");
+    std::lock_guard<std::mutex> lock(multi_map_manager_mutex_);
+    
     environment_map_msgs::msg::ChunkStamps chunk_stamps_msg;
     double time = this->now().seconds();
     multi_map_manager_->sendStamp(time, chunk_stamps_msg);
     publisher_chunk_stamps_->publish(chunk_stamps_msg);
+    
 }
 
 void MapUpdater::chunkStampsCallback(const environment_map_msgs::msg::ChunkStamps::SharedPtr msg) {
+    RCLCPP_INFO(this->get_logger(), "Received chunk stamps.");
+    std::unique_lock<std::mutex> multi_map_manager_lock(multi_map_manager_mutex_, std::defer_lock);
+    std::unique_lock<std::mutex> map_lock(map_mutex_, std::defer_lock);
+    std::lock(multi_map_manager_lock, map_lock);
+    
     std::vector<environment_map_msgs::msg::ChunkData> chunk_data_msgs;
     multi_map_manager_->receiveStamp(*msg, chunk_data_msgs);
     for (const auto & chunk_data_msg : chunk_data_msgs) {
         publisher_chunk_data_->publish(chunk_data_msg);
     }
+    
 }
 
 void MapUpdater::chunkDataCallback(const environment_map_msgs::msg::ChunkData::SharedPtr msg) {
+    RCLCPP_INFO(this->get_logger(), "Received chunk data.");
+    std::lock_guard<std::mutex> lock(multi_map_manager_mutex_);
     multi_map_manager_->receiveChunk(*msg);
 }
 
 void MapUpdater::processChunkBufferCallback() {
-    multi_map_manager_->processChunkBuffer(map_params_.obstacles_inflation_radius);
+    RCLCPP_INFO(this->get_logger(), "Processing chunk buffer.");
+    std::unique_lock<std::mutex> multi_map_manager_lock(multi_map_manager_mutex_, std::defer_lock);
+    std::unique_lock<std::mutex> map_lock(map_mutex_, std::defer_lock);
+    std::lock(multi_map_manager_lock, map_lock);
+
+    // Determine if frontier chunks need to be reset by checking if the reset flag.
+    // The reset flag is set by the path planning manager when it gets the
+    // most recent map information from planning_maps_
+    bool reset_frontier_chunks = planning_maps_->getResetChunks(false);
+    if (reset_frontier_chunks) {
+        map_->setNewChunksPublished(false);
+    }
+    RCLCPP_INFO(this->get_logger(), "Reset frontier chunks: %s", reset_frontier_chunks ? "true" : "false");
+    std::vector<int> chunks_frontiers_adrs;
+    map_->getChunksFrontiersAdrs(chunks_frontiers_adrs);
+    RCLCPP_INFO(this->get_logger(), "Chunks frontiers addresses: %zu", chunks_frontiers_adrs.size());
+
+    int num_chunks_inserted = multi_map_manager_->processChunkBuffer(reset_frontier_chunks);
+    RCLCPP_INFO(this->get_logger(), "Chunks inserted: %d", num_chunks_inserted);
+    chunks_inserted_ = num_chunks_inserted > 0;
+
+    // Visualization
+    visualization_msgs::msg::Marker chunk_cells_marker;
+    chunk_cells_marker.header.frame_id = "map";
+    chunk_cells_marker.header.stamp = this->now();
+    vis_utils_->highlightCells(chunk_cells_marker, chunks_frontiers_adrs, *map_);
+    publisher_chunk_cells_->publish(chunk_cells_marker);
+
+    std::vector<Eigen::Vector2i> bmin, bmax;
+    if(map_->getChunkBoxes(bmin, bmax)) {
+        for (int i=0; i<bmin.size(); i++) {
+            visualization_msgs::msg::Marker chunk_box_marker;
+            chunk_box_marker.header.frame_id = "map";
+            chunk_box_marker.header.stamp = this->now();
+            vis_utils_->drawBox(chunk_box_marker, bmin[i], bmax[i], *map_);
+            publisher_chunk_boxes_->publish(chunk_box_marker);
+        }
+    }
 }

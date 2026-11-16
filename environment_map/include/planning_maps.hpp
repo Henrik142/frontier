@@ -20,9 +20,10 @@ public:
     };
 
     // Planner: snapshot of the latest map, valid for the whole callback.
-    std::shared_ptr<const Map> acquire(bool reset) {
+    std::shared_ptr<const Map> acquire(bool reset_updated_box, bool reset_chunks) {
         std::lock_guard lk(m_);
-        reset_updated_box_ = reset;
+        reset_updated_box_ = reset_updated_box;
+        reset_chunks_ = reset_chunks;
         return slots_[latest_];
     };
 
@@ -36,6 +37,13 @@ public:
         std::lock_guard lk(m_);
         bool current = reset_updated_box_;
         reset_updated_box_ = reset;
+        return current;
+    }
+
+    bool getResetChunks(bool reset) {
+        std::lock_guard lk(m_);
+        bool current = reset_chunks_;
+        reset_chunks_ = reset;
         return current;
     }
 
@@ -62,4 +70,5 @@ private:
     mutable std::mutex m_;
     int latest_ = 0;
     bool reset_updated_box_ = true;
+    bool reset_chunks_ = true;
 };

@@ -6,7 +6,7 @@ PathPlanningManager::PathPlanningManager(
         : Node("path_planning_manager") {
     // Initialize the map
     planning_maps_ = planning_maps;
-    most_recent_map_ = planning_maps_->acquire(true);
+    most_recent_map_ = planning_maps_->acquire(true, true);
     map_ready_ = map_ready;
 
     double resolution = most_recent_map_->getResolution();
@@ -301,8 +301,9 @@ int PathPlanningManager::pathPlanningCallback() {
     double t1_data_acquire = this->now().seconds();
 
     // Acquire the most recent map and set it for all consumers
-    
-    most_recent_map_ = planning_maps_->acquire(true);
+    bool reset_updated_box = true;
+    bool reset_chunks = most_recent_map_->areNewChunksPublished();
+    most_recent_map_ = planning_maps_->acquire(reset_updated_box, reset_chunks);
     frontier_finder_->setMap(most_recent_map_);
     ViewNode::map_ = most_recent_map_;
 
@@ -327,6 +328,10 @@ int PathPlanningManager::pathPlanningCallback() {
 
     double t1_frontier_update = this->now().seconds();
 
+    std::vector<int> chunks_frontiers_adrs;
+    most_recent_map_->getChunksFrontiersAdrs(chunks_frontiers_adrs);
+    RCLCPP_INFO(this->get_logger(), "Chunks frontiers addresses: %zu", chunks_frontiers_adrs.size());
+
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
     frontier_finder_->computeClustersToVisit();
@@ -338,6 +343,14 @@ int PathPlanningManager::pathPlanningCallback() {
     }
 
     std::vector<int> removed_cluster_ids = frontier_finder_->getRemovedIds();
+    std::string removed_info = "Removed frontier cluster IDs: ";
+    for (int removed_id : removed_cluster_ids) {
+        std::ostringstream oss;
+        oss << removed_id;
+        if (removed_id != removed_cluster_ids.back()) oss << ",";
+        removed_info += oss.str();
+    }
+    RCLCPP_INFO(this->get_logger(), "%s", removed_info.c_str());
 
     double t2_frontier_update = this->now().seconds();
 
@@ -512,7 +525,7 @@ int PathPlanningManager::pathPlanningCallback() {
     RCLCPP_INFO(this->get_logger(), "Path planning completed in %f seconds (max time: %f seconds)",
         t2 - t1, pathplanning_max_time_);
 
-    path_planning_active_ = true;
+    path_planning_step_completed_ = true;
 
     return SUCCEED;
 }
@@ -720,9 +733,11 @@ void PathPlanningManager::odometryCallback(const nav_msgs::msg::Odometry::Shared
 }
 
 void PathPlanningManager::publishRvizAndInfo() {
-    if (!path_planning_active_) {
+    if (!path_planning_step_completed_) {
         return;
     }
+
+    path_planning_step_completed_ = false;
 
     // Get the data to be published
     std::list<FrontierCluster> frontier_clusters;

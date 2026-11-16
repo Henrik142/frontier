@@ -194,8 +194,12 @@ void MultiMapManager::receiveChunk(const environment_map_msgs::msg::ChunkData& m
     buffer_map_[msg.chunk_robot_id][msg.idx] = 1;
 }
 
-void MultiMapManager::processChunkBuffer(double inflation_radius) {
+int MultiMapManager::processChunkBuffer(bool reset_frontier_chunks) {
     // Process chunks in buffers
+    int chunks_inserted = 0;
+    if (reset_frontier_chunks) {
+        map_->resetChunks();
+    }
     for (int i = 0; i < chunk_buffer_.size(); ++i) {
         auto& buffer = chunk_buffer_[i];
         if (buffer.empty()) continue;
@@ -217,7 +221,7 @@ void MultiMapManager::processChunkBuffer(double inflation_radius) {
         }
         idx_list.push_back(last_idx);
 
-        // Update ChunksData's chunks_
+        // Get the ChunksData for this robot
         auto& chunks_data = multi_map_chunks_[i];
 
         // Add placeholder for chunks
@@ -236,8 +240,9 @@ void MultiMapManager::processChunkBuffer(double inflation_radius) {
             if (chunk.empty_) {  // Only insert a chunk once
                 chunk.voxel_adrs_ = msg.voxel_adrs;
                 chunk.voxel_occ_ = msg.voxel_occ;
-                insertChunkToMap(chunk, msg.chunk_robot_id, inflation_radius);
+                map_->manualUpdate(chunk.voxel_adrs_, chunk.voxel_occ_);
                 chunk.empty_ = false;
+                chunks_inserted++;
             }
         }
 
@@ -248,7 +253,9 @@ void MultiMapManager::processChunkBuffer(double inflation_radius) {
 
         buffer.clear();
         buffer_map_[i].clear();
+
     }
+    return chunks_inserted;
 }
 
 void MultiMapManager::mergeChunkIds(const std::vector<int>& list1, const std::vector<int>& list2,
@@ -295,61 +302,6 @@ void MultiMapManager::mergeChunkIds(const std::vector<int>& list1, const std::ve
             } else {
                 iter += 2;
             }
-        }
-    }
-}
-
-void MultiMapManager::insertChunkToMap(const MapChunk& chunk, const int& robot_id,
-                                       double inflation_radius) {
-    std::vector<int> adrs_occupied;
-
-    for (int i = 0; i < chunk.voxel_adrs_.size(); ++i) {
-        // Insert occ info
-        auto& adr = chunk.voxel_adrs_[i];
-        map_->setOccupancy(adr, chunk.voxel_occ_[i]);
-        // map_->md_->occupancy_buffer_[adr_tf] =
-        //     chunk.voxel_occ_[i] == 1 ? map_->mp_->clamp_max_log_ : map_->mp_->clamp_min_log_;
-
-        // Update the chunk box
-        Eigen::Vector2i idx;
-        map_->adrToIndex(adr, idx);
-        Eigen::Vector2d pos;
-        map_->indexToPos(idx, pos);
-        if (chunk_boxes_[robot_id].valid_) {
-            for (int k = 0; k < 2; ++k) {
-                chunk_boxes_[robot_id].min_[k] = std::min(chunk_boxes_[robot_id].min_[k], pos[k]);
-                chunk_boxes_[robot_id].max_[k] = std::max(chunk_boxes_[robot_id].max_[k], pos[k]);
-            }
-        } else {
-            chunk_boxes_[robot_id].min_ = chunk_boxes_[robot_id].max_ = pos;
-            chunk_boxes_[robot_id].valid_ = true;
-        }
-
-        if (chunk.voxel_occ_[i] == Map::FREE) {
-            // Set free cells in inflated occupancy buffer
-            map_->setInflatedOccupancy(adr, Map::FREE);
-        } else if (chunk.voxel_occ_[i] == Map::OCCUPIED) {
-            // Collect all occupied addresses
-            adrs_occupied.push_back(adr);
-        }
-
-        /*
-        // Update the all box
-        for (int k = 0; k < 2; ++k) {
-            map_->md_->all_min_[k] = std::min(map_->md_->all_min_[k], pos[k]);
-            map_->md_->all_max_[k] = std::max(map_->md_->all_max_[k], pos[k]);
-        }
-        */
-    }
-
-    // Inflate occupied cells
-    for (auto adr : adrs_occupied) {
-        Eigen::Vector2i idx;
-        map_->adrToIndex(adr, idx);
-        std::vector<Eigen::Vector2i> inflated_idxs;
-        map_->inflatePoint(idx, inflation_radius, inflated_idxs);
-        for (auto inf_idx : inflated_idxs) {
-            map_->setInflatedOccupancy(inf_idx, Map::OCCUPIED);
         }
     }
 }

@@ -50,7 +50,7 @@ public:
   void receiveStamp(const environment_map_msgs::msg::ChunkStamps& msg_in,
                     std::vector<environment_map_msgs::msg::ChunkData>& msgs_out);
   void receiveChunk(const environment_map_msgs::msg::ChunkData& msg);
-  void processChunkBuffer(double inflation_radius);
+  int processChunkBuffer(bool reset_frontier_chunks);
   void getChunkBoxes(std::vector<Eigen::Vector2d>& mins,
                      std::vector<Eigen::Vector2d>& maxs,
                      bool reset = true);
@@ -61,7 +61,6 @@ private:
                   const std::vector<int>& idx_list,
                   std::vector<environment_map_msgs::msg::ChunkData>& msgs);
   void getOccOfChunk(const std::vector<uint32_t>& adrs, std::vector<uint8_t>& occs);
-  void insertChunkToMap(const MapChunk& chunk, const int& robot_id, double inflation_radius);
 
   // Operations on the chunk idx list
   void findMissedChunkIds(const std::vector<int>& self_idx_list,

@@ -72,6 +72,9 @@ public:
   void getMapBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
   void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, bool reset);
   void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
+  bool getChunkBoxes(std::vector<Eigen::Vector2i>& bmin, std::vector<Eigen::Vector2i>& bmax) const;
+  bool getChunksFrontiersAdrs(std::vector<int>& adrs) const;
+  void resetChunks();
   void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& inflation_size) const;
   void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const;
   void fitToBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& fitMin,
@@ -94,6 +97,10 @@ public:
   
   void manualUpdate(const std::vector<Eigen::Vector2i> updated_cells,
                     const std::vector<int> updated_occupancies);
+  void manualUpdate(const std::vector<uint32_t> updated_adrs,
+                    const std::vector<uint8_t> updated_occupancies);
+  void setNewChunksPublished(bool published);
+  bool areNewChunksPublished() const;
 
 private:
   void setOccupancyValue(const Eigen::Vector2i& id, double occ);
@@ -156,6 +163,8 @@ struct MapData {
 
   // bounding box of the updated area in the map in voxel indices
   Eigen::Vector2i update_box_min_, update_box_max_;
+  std::vector<Eigen::Vector2i> chunk_boxes_min_, chunk_boxes_max_;
+  std::vector<int> chunks_frontiers_adrs_;
 
   // data for updating
   std::vector<short> count_hit_, count_miss_;
@@ -163,4 +172,5 @@ struct MapData {
   uint32_t raycast_num_;
   std::queue<int> cache_voxel_;
   bool reset_updated_box_; // stores wether the update box needs to be reset on the next call of inputPointCloud
+  bool new_chunks_published_; // stores whether new chunks have been published since the last reset
 };

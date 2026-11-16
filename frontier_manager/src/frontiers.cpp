@@ -53,8 +53,9 @@ void FrontierFinder::findFrontiers() {
 
     // Bounding box of updated region
     Eigen::Vector2i update_min, update_max;
-    // getUpdatedBox(update_min, update_max, true);
     getUpdatedBox(update_min, update_max);
+    std::vector<Eigen::Vector2i> chunk_bmin, chunk_bmax;
+    bool new_chunks = getChunkBoxes(chunk_bmin, chunk_bmax);
 
     // Define lambda function for removing outdated clusters
     // resets the frontier_flag_ entry of all cells to 0 and removes the cluster from the list of all clusters
@@ -69,6 +70,22 @@ void FrontierFinder::findFrontiers() {
     // cluster is outdated if it overlaps with the updated region and any of its cells is no longer a frontier cell
     removed_ids_.clear();
     for (auto iter = clusters_.begin(); iter != clusters_.end();) {
+        bool removed = false;
+
+        if (new_chunks) {
+            for (int i=0; i<chunk_bmin.size(); ++i) {
+                if (haveOverlap(iter->box_min_, iter->box_max_, chunk_bmin[i] - Eigen::Vector2i(1,1),
+                    chunk_bmax[i] + Eigen::Vector2i(1,1)) && isClusterOutdated(*iter)) {
+                    removed_ids_.push_back(iter->id_);
+                    removed = true;
+                    resetFlag(iter, clusters_);
+                    break;
+                }
+            }
+        }
+
+        if (removed) continue;
+
         if (haveOverlap(iter->box_min_, iter->box_max_, update_min - Eigen::Vector2i(1,1),
                         update_max + Eigen::Vector2i(1,1)) && isClusterOutdated(*iter)) {
             removed_ids_.push_back(iter->id_);
@@ -96,6 +113,18 @@ void FrontierFinder::findFrontiers() {
             }
         }
     }
+    // Iterate over cells in chunks and find frontier seed cells
+    std::vector<int> frontiers_adrs;
+    if (getChunksFrontiersAdrs(frontiers_adrs)) {
+        for (int adr : frontiers_adrs) {
+            Eigen::Vector2i cell;
+            map_->adrToIndex(adr, cell);
+            if (frontier_flag_[adr] == 0 && isKnownAndFree(cell) && isNeighborUnknown(cell)) {
+                expandFrontier(cell);
+            }
+        }
+    }
+
     splitLargeClusters(tmp_clusters_);
 }
 
@@ -875,6 +904,15 @@ void FrontierFinder::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax,
 
 void FrontierFinder::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
     map_->getUpdatedBox(bmin, bmax);
+}
+
+bool FrontierFinder::getChunkBoxes(std::vector<Eigen::Vector2i>& bmin, 
+                                   std::vector<Eigen::Vector2i>& bmax) const {
+    return map_->getChunkBoxes(bmin, bmax);
+}
+
+bool FrontierFinder::getChunksFrontiersAdrs(std::vector<int>& adrs) const {
+    return map_->getChunksFrontiersAdrs(adrs);
 }
 
 void FrontierFinder::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const {

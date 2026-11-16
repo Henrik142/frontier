@@ -137,7 +137,6 @@ void VisualizationUtils::drawFrontiers(visualization_msgs::msg::Marker & marker_
         const std::list<FrontierCluster> & frontier_clusters,
         const Map & map) {
     frontier_status.clear();
-    frontier_status.push_back("Updating frontiers");
     
     // Markers for frontier cells
     marker_cells.ns = "frontiers";
@@ -447,6 +446,37 @@ void VisualizationUtils::drawVelocity(visualization_msgs::msg::Marker & marker_v
     marker_velocity.color.g = 0.0;
     marker_velocity.color.b = 0.0;
     marker_velocity.color.a = 1.0;
+}
+
+void VisualizationUtils::highlightCells(visualization_msgs::msg::Marker & marker_cells,
+                        const std::vector<int> & cell_adrs,
+                        const Map & map) {
+    marker_cells.ns = "chunk_cells";
+    marker_cells.id = 0;
+    marker_cells.type = visualization_msgs::msg::Marker::POINTS;
+    marker_cells.action = visualization_msgs::msg::Marker::ADD;
+    marker_cells.scale.x = 0.05;
+    marker_cells.scale.y = 0.05;
+    marker_cells.color.a = 1.0;
+
+    for (const auto & cell_adr : cell_adrs) {
+        geometry_msgs::msg::Point point;
+        Eigen::Vector2d pos;
+        Eigen::Vector2i idx;
+        map.adrToIndex(cell_adr, idx);
+        map.indexToPos(idx, pos);
+        point.x = pos.x();
+        point.y = pos.y();
+        point.z = 0.0; // Assuming a 2D map
+        marker_cells.points.push_back(point);
+
+        std_msgs::msg::ColorRGBA point_color;
+        point_color.r = 1.0;
+        point_color.g = 0.0;
+        point_color.b = 0.0;
+        point_color.a = 1.0;
+        marker_cells.colors.push_back(point_color);
+    }
 }
 
 void VisualizationUtils::createFOVMarkers(visualization_msgs::msg::Marker & marker_fov, 

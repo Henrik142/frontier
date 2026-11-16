@@ -1,5 +1,7 @@
 /**: # wildcard for the node name
   ros__parameters:
+    team:
+      num_robots: 3
     fov:
       offset_x: 0.2
       offset_y: 0.0
@@ -21,7 +23,6 @@
       esdf_default_dist: 1.0
       esdf_optimistic: false
       esdf_signed_dist: false
-      num_maps: 2
       chunk_size: 200
     frontier:
       update_inflation_size: 0.2

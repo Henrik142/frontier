@@ -62,6 +62,7 @@ void Map::initMap(const InitMapParams& map_params) {
     md_->flag_visited_ = std::vector<uint32_t>(buffer_size, -1);
     md_->raycast_num_ = 0;
     md_->reset_updated_box_ = true;
+    md_->new_chunks_published_ = false;
 
     md_->update_box_min_ = Eigen::Vector2i(0, 0);
     md_->update_box_max_ = Eigen::Vector2i(0, 0);
@@ -245,6 +246,7 @@ void Map::setOccupancy(const int& adr, int occ) {
 void Map::setOccupancyValue(const Eigen::Vector2i& id, double occ) {
   if (!isInMap(id)) return;
   md_->occupancy_buffer_[toAddress(id)] = occ;
+  /*
   if (md_->reset_updated_box_) {
     md_->update_box_min_ = id;
     md_->update_box_max_ = id;
@@ -255,6 +257,8 @@ void Map::setOccupancyValue(const Eigen::Vector2i& id, double occ) {
       md_->update_box_max_[k] = std::max(md_->update_box_max_[k], id[k]);
     }
   }
+  */
+  
 }
 
 void Map::getMapBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
@@ -274,6 +278,26 @@ void Map::getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const {
   // returns the bounding box of the updated area in the map
   bmin = md_->update_box_min_;
   bmax = md_->update_box_max_;
+}
+
+bool Map::getChunkBoxes(std::vector<Eigen::Vector2i>& bmin, 
+                        std::vector<Eigen::Vector2i>& bmax) const {
+  if (md_->chunk_boxes_min_.empty()) return false;
+  bmin = md_->chunk_boxes_min_;
+  bmax = md_->chunk_boxes_max_;
+  return true;
+}
+
+bool Map::getChunksFrontiersAdrs(std::vector<int>& adrs) const {
+  if (md_->chunks_frontiers_adrs_.empty()) return false;
+  adrs = md_->chunks_frontiers_adrs_;
+  return true;
+}
+
+void Map::resetChunks() {
+  md_->chunk_boxes_min_.clear();
+  md_->chunk_boxes_max_.clear();
+  md_->chunks_frontiers_adrs_.clear();
 }
 
 void Map::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& inflation_size) const {
@@ -456,13 +480,27 @@ void Map::inflateObstacles() {
         md_->occupancy_buffer_inflate_[toAddress(x, y)] = current_state;
     }
   }
+  // reset occupancy buffer in chunk regions
+  std::vector<Eigen::Vector2i> chunk_mins, chunk_maxs;
+  bool new_chunks = getChunkBoxes(chunk_mins, chunk_maxs);
+  if(new_chunks) {
+    for (int i = 0; i < chunk_mins.size(); ++i) {
+      for (int x = chunk_mins[i](0); x <= chunk_maxs[i](0); ++x) {
+        for (int y = chunk_mins[i](1); y <= chunk_maxs[i](1); ++y) {
+          Eigen::Vector2i id = Eigen::Vector2i(x, y);
+          int current_state = getOccupancy(id);
+          md_->occupancy_buffer_inflate_[toAddress(x, y)] = current_state;
+        }
+      }
+    }
+  }
 
   int inflation_voxel_num = ceil(
     std::max(mp_->obstacles_inflation_radius_, mp_->unknown_inflation_radius_) / mp_->resolution_);
 
   // Define bounds for obstacle inflation update: larger than the updated box
   // by the inflation radius plus one
-  Eigen::Vector2i inflation_size = Eigen::Vector2i(inflation_voxel_num + 1, 
+  Eigen::Vector2i inflation_size = Eigen::Vector2i(inflation_voxel_num + 1,
                                                    inflation_voxel_num + 1);
   Eigen::Vector2i inflation_box_min = md_->update_box_min_ - inflation_size;
   Eigen::Vector2i inflation_box_max = md_->update_box_max_ + inflation_size;
@@ -505,6 +543,29 @@ void Map::inflateObstacles() {
         }
     }
   }
+
+  // inflate occupied cells from the chunk boxes
+  if (new_chunks) {
+    for (int i = 0; i < chunk_mins.size(); ++i) {
+      Eigen::Vector2i chunk_inflation_min = chunk_mins[i] - inflation_size;
+      Eigen::Vector2i chunk_inflation_max = chunk_maxs[i] + inflation_size;
+      fitToMap(chunk_inflation_min, chunk_inflation_max);
+      for (int x = chunk_inflation_min(0); x <= chunk_inflation_max(0); ++x) {
+        for (int y = chunk_inflation_min(1); y <= chunk_inflation_max(1); ++y) {
+          Eigen::Vector2i id = Eigen::Vector2i(x, y);
+          if (getOccupancy(id) == Map::OCCUPIED) {
+            inflatePoint(id, mp_->obstacles_inflation_radius_, inf_pts);
+            for (auto inf_pt : inf_pts) {
+              int idx_inf = toAddress(inf_pt);
+              if (idx_inf >= 0 && idx_inf < md_->occupancy_buffer_inflate_.size()) {
+                md_->occupancy_buffer_inflate_[idx_inf] = Map::OCCUPIED;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 void Map::setInflatedOccupancy(const int& adr, int occ) {
@@ -545,6 +606,11 @@ void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells, const s
 
   for (size_t i = 0; i < updated_cells.size(); ++i) {
     setOccupancy(updated_cells[i], updated_occupancies[i]);
+
+    if (updated_occupancies[i] == Map::FREE) {
+      md_->chunks_frontiers_adrs_.push_back(toAddress(updated_cells[i]));
+    }
+
     if (i == 0) {
       update_box_min = updated_cells[i];
       update_box_max = updated_cells[i];
@@ -556,8 +622,27 @@ void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells, const s
     }
   }
 
-  md_->update_box_min_ = update_box_min;
-  md_->update_box_max_ = update_box_max;
+  md_->chunk_boxes_min_.push_back(update_box_min);
+  md_->chunk_boxes_max_.push_back(update_box_max);
+}
+
+void Map::manualUpdate(const std::vector<uint32_t> updated_adrs, const std::vector<uint8_t> updated_occupancies) {
+  std::vector<Eigen::Vector2i> updated_cells;
+  for (size_t i = 0; i < updated_adrs.size(); ++i) {
+    Eigen::Vector2i id;
+    adrToIndex(static_cast<int>(updated_adrs[i]), id);
+    updated_cells.push_back(id);
+  }
+  manualUpdate(updated_cells, std::vector<int>(updated_occupancies.begin(),
+                                               updated_occupancies.end()));
+}
+
+void Map::setNewChunksPublished(bool published) {
+  md_->new_chunks_published_ = published;
+}
+
+bool Map::areNewChunksPublished() const {
+  return md_->new_chunks_published_;
 }
 
 void Map::updateESDF2d() {
