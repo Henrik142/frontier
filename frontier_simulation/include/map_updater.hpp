@@ -51,8 +51,11 @@ public:
 
 private:
     void initParams();
-    void pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg, 
-        const Odometry::ConstSharedPtr & odometry_msg);
+    void initOdometrySubscriptions();
+    void hippoOdometryCallback(const Odometry::SharedPtr & odometry_msg, int hippo_index);
+    void pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg);
+    void clearOtherHippoPositions(const std::vector<int>& updated_adrs,
+                                  const std::vector<Eigen::Vector2d>& robot_positions);
     void publishMap();
     void sendChunkStamps();
     void chunkStampsCallback(const environment_map_msgs::msg::ChunkStamps::SharedPtr msg);
@@ -68,9 +71,11 @@ private:
     rclcpp::TimerBase::SharedPtr process_chunk_buffer_timer_;
 
     // Subscribers and publishers
-    message_filters::Subscriber<PointCloud2> subscription_pc_;
+    rclcpp::Subscription<PointCloud2>::SharedPtr subscription_pc_;
     message_filters::Subscriber<Odometry> subscription_odometry_;
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+
+    std::vector<rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr> subscription_hippo_odometries_;
 
     rclcpp::Publisher<environment_map_msgs::msg::ChunkStamps>::SharedPtr publisher_chunk_stamps_;
     rclcpp::Subscription<environment_map_msgs::msg::ChunkStamps>::SharedPtr subscription_chunk_stamps_;
@@ -88,10 +93,12 @@ private:
 
     // Params
     std::string vehicle_name_;
+    int hippo_id_;
     PerceptionUtils::InitFOVParams fov_params_;
     Map::InitMapParams map_params_;
     int num_maps_;
     int chunk_size_;
+    double communication_range_;
 
     // Utils
     std::shared_ptr<MapBuilder> map_builder_;
@@ -103,13 +110,16 @@ private:
     std::shared_ptr<MultiMapManager> multi_map_manager_;
     std::shared_ptr<PlanningMaps> planning_maps_;
     std::shared_ptr<std::atomic_bool> map_ready_ = std::make_shared<std::atomic_bool>(false);
-
+    std::vector<Eigen::Vector2d> hippo_positions_;
+    std::vector<double> hippo_yaws_;
+    
     // Mutex
     std::mutex map_mutex_;
     std::mutex multi_map_manager_mutex_;
 
     // Initialization flags
     bool init_box_discovered_ = false;
+    bool odometry_self_received_ = false;
 
     bool chunks_inserted_ = false;
 

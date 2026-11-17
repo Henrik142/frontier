@@ -7,11 +7,11 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     map_->initMap(map_params_);
     map_builder_.reset(new MapBuilder(map_.get()));
 
-    int hippo_id = std::stoi(vehicle_name_.substr(vehicle_name_.size() - 2));
-    RCLCPP_INFO(this->get_logger(), "hippo_id=%d", hippo_id);
+    hippo_id_ = std::stoi(vehicle_name_.substr(vehicle_name_.size() - 2));
+    RCLCPP_INFO(this->get_logger(), "hippo_id=%d", hippo_id_);
 
     multi_map_manager_.reset(new MultiMapManager());
-    multi_map_manager_->init(hippo_id, num_maps_, chunk_size_);
+    multi_map_manager_->init(hippo_id_, num_maps_, chunk_size_);
     multi_map_manager_->setMap(map_);
 
     /*
@@ -79,10 +79,19 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     cb_group_pub_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cb_group_chunks_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-    // Create point cloud and odometry subscriptions
+    initOdometrySubscriptions();
+
+    // Create point cloud subscription
     rclcpp::SubscriptionOptions sub_options_main;
     sub_options_main.callback_group = cb_group_main_;
 
+    subscription_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "map_pointcloud",
+        rclcpp::QoS(1),
+        std::bind(&MapUpdater::pointCloudCallback, this, std::placeholders::_1),
+        sub_options_main);
+
+    /*
     subscription_pc_.subscribe(this, "map_pointcloud", rmw_qos_profile_default, sub_options_main);
     subscription_odometry_.subscribe(this, "odometry", rmw_qos_profile_default, sub_options_main);
 
@@ -91,19 +100,22 @@ MapUpdater::MapUpdater() : Node("map_updater") {
         SyncPolicy(10), subscription_pc_, subscription_odometry_);
     sync_->registerCallback(std::bind(&MapUpdater::pointCloudCallback, this,
         std::placeholders::_1, std::placeholders::_2));
+    */
 
     // Create subscriptions for chunk stamps and chunk data using the chunks callback group
     rclcpp::SubscriptionOptions sub_options_chunks;
     sub_options_chunks.callback_group = cb_group_chunks_;
 
     subscription_chunk_stamps_ = this->create_subscription<environment_map_msgs::msg::ChunkStamps>(
-        "/multi_map_manager/chunk_stamps",
+        //"/multi_map_manager/chunk_stamps",
+        "chunk_stamps_filtered",
         rclcpp::QoS(1).transient_local(),
         std::bind(&MapUpdater::chunkStampsCallback, this, std::placeholders::_1),
         sub_options_chunks);
 
     subscription_chunk_data_ = this->create_subscription<environment_map_msgs::msg::ChunkData>(
-        "/multi_map_manager/chunk_data",
+        //"/multi_map_manager/chunk_data",
+        "chunk_data_filtered",
         rclcpp::QoS(1).transient_local(),
         std::bind(&MapUpdater::chunkDataCallback, this, std::placeholders::_1),
         sub_options_chunks);
@@ -189,6 +201,7 @@ void MapUpdater::initParams() {
     declare_parameter<bool>("map.esdf_signed_dist", false);
     declare_parameter<int>("team.num_robots", 2);
     declare_parameter<int>("map.chunk_size", 200);
+    declare_parameter<double>("team.communication_range", 1.0);
 
     map_params_.xsize = get_parameter("map.xsize").as_double();
     RCLCPP_INFO(get_logger(), "map.xsize=%f", map_params_.xsize);
@@ -227,29 +240,50 @@ void MapUpdater::initParams() {
     RCLCPP_INFO(get_logger(), "num_maps=%d", num_maps_);
     chunk_size_ = get_parameter("map.chunk_size").as_int();
     RCLCPP_INFO(get_logger(), "map.chunk_size=%d", chunk_size_);
+    communication_range_ = get_parameter("team.communication_range").as_double();
+    RCLCPP_INFO(get_logger(), "team.communication_range=%f", communication_range_);
 }
 
-void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg, 
-        const Odometry::ConstSharedPtr & odometry_msg) {
+void MapUpdater::initOdometrySubscriptions() {
+    subscription_hippo_odometries_.resize(num_maps_);
+    hippo_positions_.assign(num_maps_, Eigen::Vector2d::Zero());
+    hippo_yaws_.assign(num_maps_, 0);
+    for (int i = 0; i < num_maps_; ++i) {
+        std::string topic = std::string("/uuv") + (i < 10 ? "0" : "") + std::to_string(i) + "/odometry";
+        subscription_hippo_odometries_[i] = this->create_subscription<nav_msgs::msg::Odometry>(
+            topic,
+            10,
+            [this, i](const nav_msgs::msg::Odometry::SharedPtr msg) {
+                this->hippoOdometryCallback(msg, i);
+            }
+        );
+        RCLCPP_INFO(get_logger(), "Subscribed to: %s", topic.c_str());
+    }
+}
+
+void MapUpdater::hippoOdometryCallback(const Odometry::SharedPtr & odometry_msg, int hippo_index) {
+    if (hippo_index < 0 || hippo_index >= num_maps_) {
+        RCLCPP_WARN(get_logger(), "Received odometry for invalid hippo_index: %d", hippo_index);
+        return;
+    }
+    if (hippo_index == hippo_id_) {
+        odometry_self_received_ = true;
+    }
+    hippo_positions_[hippo_index] << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
+    hippo_yaws_[hippo_index] = tf2::getYaw(odometry_msg->pose.pose.orientation);
+}
+
+void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_msg) {
     double t1 = this->now().seconds();
 
-    std::lock_guard<std::mutex> lock(map_mutex_);
-
-    if (last_update_ != 0.0) {
-        std_msgs::msg::Float64 update_rate_msg;
-        update_rate_msg.data = t1 - last_update_;
-        publisher_map_update_rate_->publish(update_rate_msg);
-    }
-    last_update_ = t1;
-
-    Eigen::Vector2d robot_position;
-    double yaw;
-    robot_position << odometry_msg->pose.pose.position.x, odometry_msg->pose.pose.position.y;
-    yaw = tf2::getYaw(odometry_msg->pose.pose.orientation);
+    std::vector<Eigen::Vector2d> robot_positions = hippo_positions_;
+    std::vector<double> robot_yaws = hippo_yaws_;
+    Eigen::Vector2d robot_position = robot_positions[hippo_id_];
+    double yaw = robot_yaws[hippo_id_];    
 
     // "discover" a box around the initial position
     std::vector<int> init_box_adrs;
-    if (!init_box_discovered_) {
+    if (!init_box_discovered_ && odometry_self_received_) {
         Eigen::Vector2d box_mid_pos;
         box_mid_pos.x() = robot_position.x();
         box_mid_pos.y() = robot_position.y();
@@ -267,8 +301,6 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
                 init_box_adrs.push_back(map_->toAddress(Eigen::Vector2i(x, y)));
             }
         }
-
-        RCLCPP_INFO(this->get_logger(), "Initialization box set.");
     }
     
     // Convert ROS message to PCL point cloud
@@ -288,6 +320,8 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     // Update the map with the new point cloud
     RCLCPP_INFO(this->get_logger(), "Starting Map update.");
     // RCLCPP_INFO(this->get_logger(), "Camera position: x=%f, y=%f", camera_position.x(), camera_position.y());
+
+    std::lock_guard<std::mutex> lock(map_mutex_);
     
     if (map_->getOccupancy(camera_position) == Map::FREE) {
         // Check if the updated box needs to be reset. Each time the main loop of the path planning manager
@@ -300,8 +334,11 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
         
         if (!init_box_adrs.empty()) {
             updated_adrs.insert(updated_adrs.end(), init_box_adrs.begin(), init_box_adrs.end());
+            RCLCPP_INFO(this->get_logger(), "Initialization box set.");
             init_box_discovered_ = true;
         }
+
+        clearOtherHippoPositions(updated_adrs, robot_positions);
 
         std::vector<uint32_t> unsigned_adrs(updated_adrs.begin(), updated_adrs.end());
         std::lock_guard<std::mutex> lock(multi_map_manager_mutex_);
@@ -339,6 +376,39 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
     update_time_msg.data = t2 - t1;
     publisher_map_update_time_->publish(update_time_msg);
     RCLCPP_INFO(this->get_logger(), "Map update completed in %f seconds (max time: %f)", t2 - t1, update_max_time_);
+
+    if (last_update_ != 0.0) {
+        std_msgs::msg::Float64 update_rate_msg;
+        update_rate_msg.data = t1 - last_update_;
+        publisher_map_update_rate_->publish(update_rate_msg);
+    }
+    last_update_ = t1;
+}
+
+void MapUpdater::clearOtherHippoPositions(const std::vector<int>& updated_adrs,
+                                          const std::vector<Eigen::Vector2d>& robot_positions) {
+    std::vector<Eigen::Vector2i> cleared_ids;
+    std::vector<int> cleared_occupancies;
+
+    for (int i = 0; i < robot_positions.size(); ++i) {
+        if (i==hippo_id_) continue;
+        if ((robot_positions[i] - robot_positions[hippo_id_]).norm() > communication_range_) continue;
+        for (auto adr : updated_adrs) {
+            Eigen::Vector2i id;
+            map_->adrToIndex(adr, id);
+            Eigen::Vector2d pos;
+            map_->indexToPos(id, pos);
+            int occ = map_->getOccupancy(id);
+            if ((robot_positions[i] - pos).norm() < 0.25 && occ == Map::OCCUPIED) {
+                cleared_ids.push_back(id);
+                cleared_occupancies.push_back(Map::FREE);
+            }
+        }
+    }
+
+    if (!cleared_ids.empty()) {
+        map_->manualUpdate(cleared_ids, cleared_occupancies, false);
+    }
 }
 
 void MapUpdater::publishMap() {
@@ -356,7 +426,7 @@ void MapUpdater::publishMap() {
     grid_msg.header.stamp = this->now();
     grid_msg.header.frame_id = "map";
 
-    bool show_inflation = true;
+    bool show_inflation = false;
     vis_utils_->drawMap(grid_msg, *map_snapshot, show_inflation);
 
     publisher_map_->publish(grid_msg);

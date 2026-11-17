@@ -2,6 +2,7 @@
   ros__parameters:
     team:
       num_robots: 3
+      communication_range: 1.0
     fov:
       offset_x: 0.2
       offset_y: 0.0
@@ -17,7 +18,7 @@
       p_min: 0.12
       p_max: 0.97
       p_occ : 0.8
-      obstacles_inflation_radius: 0.2
+      obstacles_inflation_radius: 0.25
       unknown_inflation_radius: 0.1
       esdf_inflation: 1.0
       esdf_default_dist: 1.0

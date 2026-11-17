@@ -32,10 +32,15 @@ add_library(frontier_simulation STATIC
   src/path_planning_manager.cpp
   src/trajectory_planner.cpp
   src/astar_test.cpp
+  src/messaging_master.cpp
 )
 
 add_executable(hippo_visualization
   src/hippo_visualization_node.cpp
+)
+
+add_executable(messaging_master
+  src/messaging_master_node.cpp
 )
 
 add_executable(astar_test
@@ -88,6 +93,8 @@ target_include_directories(frontier_simulation PUBLIC ${PCL_INCLUDE_DIRS})
 target_link_libraries(frontier_simulation Eigen3::Eigen ${PCL_LIBRARIES})
 
 target_link_libraries(hippo_visualization frontier_simulation)
+
+target_link_libraries(messaging_master frontier_simulation)
 
 target_link_libraries(velocity_control frontier_simulation)
 
@@ -144,6 +151,11 @@ install(
 
 install(
   TARGETS point_cloud_processor
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  TARGETS messaging_master
   DESTINATION lib/${PROJECT_NAME}
 )
 

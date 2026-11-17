@@ -96,7 +96,8 @@ public:
   void setDataFrom(const Map& real);
   
   void manualUpdate(const std::vector<Eigen::Vector2i> updated_cells,
-                    const std::vector<int> updated_occupancies);
+                    const std::vector<int> updated_occupancies,
+                    bool update_chunk_info);
   void manualUpdate(const std::vector<uint32_t> updated_adrs,
                     const std::vector<uint8_t> updated_occupancies);
   void setNewChunksPublished(bool published);

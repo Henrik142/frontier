@@ -6,6 +6,7 @@ find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common filters)
 find_package(tf2 REQUIRED)
@@ -25,6 +26,7 @@ target_include_directories(frontier_perception PUBLIC
 ament_target_dependencies(frontier_perception
   rclcpp
   sensor_msgs
+  std_msgs
   pcl_conversions
   geometry_msgs
   tf2
@@ -55,6 +57,7 @@ ament_export_dependencies(
   rclcpp
   sensor_msgs
   geometry_msgs
+  std_msgs
   pcl_conversions
   PCL
   tf2

@@ -600,30 +600,36 @@ void Map::setDataFrom(const Map& real) {
   *md_ = *(real.md_);
 }
 
-void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells, const std::vector<int> updated_occupancies) {
+void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells,
+                       const std::vector<int> updated_occupancies,
+                       bool update_chunk_info) {
   Eigen::Vector2i update_box_min = Eigen::Vector2i(0,0);
   Eigen::Vector2i update_box_max = Eigen::Vector2i(0,0);
 
   for (size_t i = 0; i < updated_cells.size(); ++i) {
     setOccupancy(updated_cells[i], updated_occupancies[i]);
 
-    if (updated_occupancies[i] == Map::FREE) {
-      md_->chunks_frontiers_adrs_.push_back(toAddress(updated_cells[i]));
-    }
+    if (update_chunk_info) {
+      if (updated_occupancies[i] == Map::FREE) {
+        md_->chunks_frontiers_adrs_.push_back(toAddress(updated_cells[i]));
+      }
 
-    if (i == 0) {
-      update_box_min = updated_cells[i];
-      update_box_max = updated_cells[i];
-    } else {
-      update_box_min(0) = std::min(update_box_min(0), updated_cells[i](0));
-      update_box_min(1) = std::min(update_box_min(1), updated_cells[i](1));
-      update_box_max(0) = std::max(update_box_max(0), updated_cells[i](0));
-      update_box_max(1) = std::max(update_box_max(1), updated_cells[i](1));
+      if (i == 0) {
+        update_box_min = updated_cells[i];
+        update_box_max = updated_cells[i];
+      } else {
+        update_box_min(0) = std::min(update_box_min(0), updated_cells[i](0));
+        update_box_min(1) = std::min(update_box_min(1), updated_cells[i](1));
+        update_box_max(0) = std::max(update_box_max(0), updated_cells[i](0));
+        update_box_max(1) = std::max(update_box_max(1), updated_cells[i](1));
+      }
     }
   }
 
-  md_->chunk_boxes_min_.push_back(update_box_min);
-  md_->chunk_boxes_max_.push_back(update_box_max);
+  if (update_chunk_info) {
+    md_->chunk_boxes_min_.push_back(update_box_min);
+    md_->chunk_boxes_max_.push_back(update_box_max);
+  }
 }
 
 void Map::manualUpdate(const std::vector<uint32_t> updated_adrs, const std::vector<uint8_t> updated_occupancies) {
@@ -633,8 +639,9 @@ void Map::manualUpdate(const std::vector<uint32_t> updated_adrs, const std::vect
     adrToIndex(static_cast<int>(updated_adrs[i]), id);
     updated_cells.push_back(id);
   }
-  manualUpdate(updated_cells, std::vector<int>(updated_occupancies.begin(),
-                                               updated_occupancies.end()));
+  manualUpdate(updated_cells,
+               std::vector<int>(updated_occupancies.begin(), updated_occupancies.end()),
+               true);
 }
 
 void Map::setNewChunksPublished(bool published) {
