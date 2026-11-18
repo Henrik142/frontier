@@ -115,7 +115,7 @@ void FrontierFinder::findFrontiers() {
     }
     // Iterate over cells in chunks and find frontier seed cells
     std::vector<int> frontiers_adrs;
-    if (getChunksFrontiersAdrs(frontiers_adrs)) {
+    if (getChunksFreeAdrs(frontiers_adrs)) {
         for (int adr : frontiers_adrs) {
             Eigen::Vector2i cell;
             map_->adrToIndex(adr, cell);
@@ -911,8 +911,8 @@ bool FrontierFinder::getChunkBoxes(std::vector<Eigen::Vector2i>& bmin,
     return map_->getChunkBoxes(bmin, bmax);
 }
 
-bool FrontierFinder::getChunksFrontiersAdrs(std::vector<int>& adrs) const {
-    return map_->getChunksFrontiersAdrs(adrs);
+bool FrontierFinder::getChunksFreeAdrs(std::vector<int>& adrs) const {
+    return map_->getChunksFreeAdrs(adrs);
 }
 
 void FrontierFinder::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const {

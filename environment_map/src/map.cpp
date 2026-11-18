@@ -288,16 +288,16 @@ bool Map::getChunkBoxes(std::vector<Eigen::Vector2i>& bmin,
   return true;
 }
 
-bool Map::getChunksFrontiersAdrs(std::vector<int>& adrs) const {
-  if (md_->chunks_frontiers_adrs_.empty()) return false;
-  adrs = md_->chunks_frontiers_adrs_;
+bool Map::getChunksFreeAdrs(std::vector<int>& adrs) const {
+  if (md_->chunks_free_adrs_.empty()) return false;
+  adrs = md_->chunks_free_adrs_;
   return true;
 }
 
 void Map::resetChunks() {
   md_->chunk_boxes_min_.clear();
   md_->chunk_boxes_max_.clear();
-  md_->chunks_frontiers_adrs_.clear();
+  md_->chunks_free_adrs_.clear();
 }
 
 void Map::inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2i& inflation_size) const {
@@ -611,7 +611,7 @@ void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells,
 
     if (update_chunk_info) {
       if (updated_occupancies[i] == Map::FREE) {
-        md_->chunks_frontiers_adrs_.push_back(toAddress(updated_cells[i]));
+        md_->chunks_free_adrs_.push_back(toAddress(updated_cells[i]));
       }
 
       if (i == 0) {
@@ -632,7 +632,7 @@ void Map::manualUpdate(const std::vector<Eigen::Vector2i> updated_cells,
   }
 }
 
-void Map::manualUpdate(const std::vector<uint32_t> updated_adrs, const std::vector<uint8_t> updated_occupancies) {
+void Map::chunkUpdate(const std::vector<uint32_t> updated_adrs, const std::vector<uint8_t> updated_occupancies) {
   std::vector<Eigen::Vector2i> updated_cells;
   for (size_t i = 0; i < updated_adrs.size(); ++i) {
     Eigen::Vector2i id;

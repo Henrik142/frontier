@@ -30,7 +30,6 @@
 
 #include "environment_map_msgs/msg/chunk_data.hpp"
 #include "environment_map_msgs/msg/chunk_stamps.hpp"
-#include "environment_map_msgs/msg/idx_list.hpp"
 
 using PointCloud2 = sensor_msgs::msg::PointCloud2;
 using Odometry = nav_msgs::msg::Odometry;

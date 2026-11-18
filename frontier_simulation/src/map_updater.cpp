@@ -72,7 +72,7 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     publisher_chunk_stamps_ = this->create_publisher<environment_map_msgs::msg::ChunkStamps>(
             "/multi_map_manager/chunk_stamps", rclcpp::QoS(1).transient_local());
     publisher_chunk_data_ = this->create_publisher<environment_map_msgs::msg::ChunkData>(
-            "/multi_map_manager/chunk_data", rclcpp::QoS(1).transient_local());
+            "/multi_map_manager/chunk_data", rclcpp::QoS(1000).transient_local());
 
     // Initialize two mutually exclusive callback groups that enable concurrent callbacks
     cb_group_main_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -116,7 +116,7 @@ MapUpdater::MapUpdater() : Node("map_updater") {
     subscription_chunk_data_ = this->create_subscription<environment_map_msgs::msg::ChunkData>(
         //"/multi_map_manager/chunk_data",
         "chunk_data_filtered",
-        rclcpp::QoS(1).transient_local(),
+        rclcpp::QoS(1000).transient_local(),
         std::bind(&MapUpdater::chunkDataCallback, this, std::placeholders::_1),
         sub_options_chunks);
 
@@ -342,7 +342,8 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
         std::vector<uint32_t> unsigned_adrs(updated_adrs.begin(), updated_adrs.end());
         std::lock_guard<std::mutex> lock(multi_map_manager_mutex_);
-        multi_map_manager_->updateMapChunk(unsigned_adrs);
+        int total_chunks = multi_map_manager_->updateMapChunk(unsigned_adrs);
+        RCLCPP_INFO(this->get_logger(), "Total chunks: %d", total_chunks);
     } else {
         RCLCPP_WARN(this->get_logger(), "Camera position is not in free space, skipping point cloud input.");
         return;
@@ -357,6 +358,7 @@ void MapUpdater::pointCloudCallback(const PointCloud2::ConstSharedPtr & cloud_ms
 
     // Store the map data in planning_maps_ so it is available for the pathplanning module
     // as well as for publishing to Rviz
+    RCLCPP_INFO(this->get_logger(), "Chunks inserted: %s", chunks_inserted_ ? "true" : "false");
     if (chunks_inserted_) map_->setNewChunksPublished(true);
     if (planning_maps_->publish(*map_)) {
         RCLCPP_INFO(this->get_logger(), "Map written to planning maps.");
@@ -389,6 +391,7 @@ void MapUpdater::clearOtherHippoPositions(const std::vector<int>& updated_adrs,
                                           const std::vector<Eigen::Vector2d>& robot_positions) {
     std::vector<Eigen::Vector2i> cleared_ids;
     std::vector<int> cleared_occupancies;
+    double clear_radius = 0.25;
 
     for (int i = 0; i < robot_positions.size(); ++i) {
         if (i==hippo_id_) continue;
@@ -399,7 +402,7 @@ void MapUpdater::clearOtherHippoPositions(const std::vector<int>& updated_adrs,
             Eigen::Vector2d pos;
             map_->indexToPos(id, pos);
             int occ = map_->getOccupancy(id);
-            if ((robot_positions[i] - pos).norm() < 0.25 && occ == Map::OCCUPIED) {
+            if ((robot_positions[i] - pos).norm() < clear_radius && occ == Map::OCCUPIED) {
                 cleared_ids.push_back(id);
                 cleared_occupancies.push_back(Map::FREE);
             }
@@ -473,10 +476,23 @@ void MapUpdater::chunkStampsCallback(const environment_map_msgs::msg::ChunkStamp
     std::lock(multi_map_manager_lock, map_lock);
     
     std::vector<environment_map_msgs::msg::ChunkData> chunk_data_msgs;
-    multi_map_manager_->receiveStamp(*msg, chunk_data_msgs);
+    std::vector<std::vector<int>> all_missed;
+    multi_map_manager_->receiveStamp(*msg, chunk_data_msgs, all_missed);
+    int num_sent = 0;
     for (const auto & chunk_data_msg : chunk_data_msgs) {
         publisher_chunk_data_->publish(chunk_data_msg);
+        num_sent++;
     }
+    
+    for (size_t i = 0; i < all_missed.size(); ++i) {
+        std::string missed_str;
+        for (const auto& id : all_missed[i]) {
+            missed_str += std::to_string(id) + " ";
+        }
+        RCLCPP_INFO(this->get_logger(), "Missed chunks for robot %zu: %s", i, missed_str.c_str());
+    }
+    if (num_sent > 0)
+        RCLCPP_INFO(this->get_logger(), "Number of chunk data messages sent: %d", num_sent);
     
 }
 
@@ -484,6 +500,11 @@ void MapUpdater::chunkDataCallback(const environment_map_msgs::msg::ChunkData::S
     RCLCPP_INFO(this->get_logger(), "Received chunk data.");
     std::lock_guard<std::mutex> lock(multi_map_manager_mutex_);
     multi_map_manager_->receiveChunk(*msg);
+    int num_chunks_in_buffer = multi_map_manager_->getNumChunksInBuffer(msg->chunk_robot_id);
+    if (num_chunks_in_buffer > 0) {
+        RCLCPP_INFO(this->get_logger(), "Number of chunks in buffer for robot %d: %d",
+                    msg->chunk_robot_id, num_chunks_in_buffer);
+    }
 }
 
 void MapUpdater::processChunkBufferCallback() {
@@ -500,19 +521,28 @@ void MapUpdater::processChunkBufferCallback() {
         map_->setNewChunksPublished(false);
     }
     RCLCPP_INFO(this->get_logger(), "Reset frontier chunks: %s", reset_frontier_chunks ? "true" : "false");
-    std::vector<int> chunks_frontiers_adrs;
-    map_->getChunksFrontiersAdrs(chunks_frontiers_adrs);
-    RCLCPP_INFO(this->get_logger(), "Chunks frontiers addresses: %zu", chunks_frontiers_adrs.size());
+    std::vector<int> chunks_free_adrs;
+    map_->getChunksFreeAdrs(chunks_free_adrs);
+    RCLCPP_INFO(this->get_logger(), "Chunks free addresses: %zu", chunks_free_adrs.size());
+
+    int total_chunks_in_buffer = 0;
+    for (int i=0; i<num_maps_; i++) {
+        total_chunks_in_buffer += multi_map_manager_->getNumChunksInBuffer(i);
+    }
+    RCLCPP_INFO(this->get_logger(), "Total chunks in buffer: %d", total_chunks_in_buffer);
 
     int num_chunks_inserted = multi_map_manager_->processChunkBuffer(reset_frontier_chunks);
-    RCLCPP_INFO(this->get_logger(), "Chunks inserted: %d", num_chunks_inserted);
     chunks_inserted_ = num_chunks_inserted > 0;
+    if (chunks_inserted_) {
+        RCLCPP_INFO(this->get_logger(), "Chunks inserted: %d", num_chunks_inserted);
+    }
+    
 
     // Visualization
     visualization_msgs::msg::Marker chunk_cells_marker;
     chunk_cells_marker.header.frame_id = "map";
     chunk_cells_marker.header.stamp = this->now();
-    vis_utils_->highlightCells(chunk_cells_marker, chunks_frontiers_adrs, *map_);
+    vis_utils_->highlightCells(chunk_cells_marker, chunks_free_adrs, *map_);
     publisher_chunk_cells_->publish(chunk_cells_marker);
 
     std::vector<Eigen::Vector2i> bmin, bmax;

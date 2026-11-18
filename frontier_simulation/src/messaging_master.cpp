@@ -17,7 +17,7 @@ MessagingMaster::MessagingMaster() : rclcpp::Node("messaging_master")
     
     subscription_chunk_data_ = this->create_subscription<environment_map_msgs::msg::ChunkData>(
         "/multi_map_manager/chunk_data",
-        10,
+        1000,
         std::bind(&MessagingMaster::chunkDataCallback, this, std::placeholders::_1)
     );
 }
@@ -49,7 +49,7 @@ void MessagingMaster::initPublishers() {
         RCLCPP_INFO(get_logger(), "Advertising: %s", chunk_stamps_topic.c_str());
 
         std::string chunk_data_topic = std::string("/uuv") + (i < 10 ? "0" : "") + std::to_string(i) + "/chunk_data_filtered";
-        publishers_chunk_data_[i] = this->create_publisher<environment_map_msgs::msg::ChunkData>(chunk_data_topic, rclcpp::QoS(1).transient_local());
+        publishers_chunk_data_[i] = this->create_publisher<environment_map_msgs::msg::ChunkData>(chunk_data_topic, rclcpp::QoS(1000).transient_local());
         RCLCPP_INFO(get_logger(), "Advertising: %s", chunk_data_topic.c_str());
     }
 }
@@ -73,7 +73,7 @@ void MessagingMaster::chunkStampsCallback(const environment_map_msgs::msg::Chunk
         if (i == msg->from_robot_id) continue;
         Eigen::Vector2d to_robot_position = hippo_positions_[i];
         double distance = (from_robot_position - to_robot_position).norm();
-        if (distance <= communication_range_) {
+        if (distance <= communication_range_ && randomDouble() <= msg_reliability_) {
             publishers_chunk_stamps_[i]->publish(*msg);
         }
     }
@@ -84,13 +84,10 @@ void MessagingMaster::chunkDataCallback(const environment_map_msgs::msg::ChunkDa
     from_robot_position.x() = hippo_positions_[msg->from_robot_id].x();
     from_robot_position.y() = hippo_positions_[msg->from_robot_id].y();
 
-    for (int i=0; i<num_robots_; ++i) {
-        if (i == msg->from_robot_id) continue;
-        Eigen::Vector2d to_robot_position = hippo_positions_[i];
-        double distance = (from_robot_position - to_robot_position).norm();
-        if (distance <= communication_range_) {
-            publishers_chunk_data_[i]->publish(*msg);
-        }
+    Eigen::Vector2d to_robot_position = hippo_positions_[msg->to_robot_id];
+    double distance = (from_robot_position - to_robot_position).norm();
+    if (distance <= communication_range_ && randomDouble() <= msg_reliability_) {
+        publishers_chunk_data_[msg->to_robot_id]->publish(*msg);
     }
 }
 
@@ -102,4 +99,16 @@ void MessagingMaster::initParams() {
     declare_parameter<double>("communication_range", 2.0);
     communication_range_ = get_parameter("communication_range").as_double();
     RCLCPP_INFO(get_logger(), "communication_range=%f", communication_range_);
+
+    declare_parameter<double>("msg_reliability", 1.0);
+    msg_reliability_ = get_parameter("msg_reliability").as_double();
+    RCLCPP_INFO(get_logger(), "msg_reliability=%f", msg_reliability_);
+}
+
+double MessagingMaster::randomDouble() {
+    // returns random double between 0 and 1
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_real_distribution<double> dist(0.0, 1.0);
+    return dist(gen);
 }

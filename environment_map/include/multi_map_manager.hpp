@@ -9,7 +9,6 @@
 #include "map.hpp"
 #include "environment_map_msgs/msg/chunk_data.hpp"
 #include "environment_map_msgs/msg/chunk_stamps.hpp"
-#include "environment_map_msgs/msg/idx_list.hpp"
 
 // A map chunk, the elementary exchange unit between robots
 struct MapChunk {
@@ -45,11 +44,13 @@ public:
   void setMap(std::shared_ptr<Map> map);
   void init(int robot_id, int map_num, int chunk_size);
 
-  void updateMapChunk(const std::vector<uint32_t>& adrs);
+  int updateMapChunk(const std::vector<uint32_t>& adrs);
   void sendStamp(double time, environment_map_msgs::msg::ChunkStamps& msg);
   void receiveStamp(const environment_map_msgs::msg::ChunkStamps& msg_in,
-                    std::vector<environment_map_msgs::msg::ChunkData>& msgs_out);
+                    std::vector<environment_map_msgs::msg::ChunkData>& msgs_out,
+                    std::vector<std::vector<int>>& all_missed);
   void receiveChunk(const environment_map_msgs::msg::ChunkData& msg);
+  int getNumChunksInBuffer(int chunk_robot_id);
   int processChunkBuffer(bool reset_frontier_chunks);
   void getChunkBoxes(std::vector<Eigen::Vector2d>& mins,
                      std::vector<Eigen::Vector2d>& maxs,

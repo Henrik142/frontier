@@ -10,6 +10,7 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>environment_map</depend>
+  <depend>environment_map_msgs</depend>
   <depend>frontier_perception</depend>
   <depend>frontier_manager</depend>
   <depend>path_searching</depend>

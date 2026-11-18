@@ -22,9 +22,14 @@ public:
     // Planner: snapshot of the latest map, valid for the whole callback.
     std::shared_ptr<const Map> acquire(bool reset_updated_box, bool reset_chunks) {
         std::lock_guard lk(m_);
+        std::shared_ptr<Map> latest = slots_[latest_];
         reset_updated_box_ = reset_updated_box;
-        reset_chunks_ = reset_chunks;
-        return slots_[latest_];
+        if(reset_chunks) {
+            if (latest->areNewChunksPublished()) {
+                reset_chunks_ = true;
+            }
+        }
+        return latest;
     };
 
     std::shared_ptr<const Map> acquire() const {

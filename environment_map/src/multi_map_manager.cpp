@@ -31,7 +31,7 @@ void MultiMapManager::init(int robot_id, int map_num, int chunk_size) {
     for (auto& time : last_chunk_stamp_time_) time = 0.0;
 }
 
-void MultiMapManager::updateMapChunk(const std::vector<uint32_t>& adrs) {
+int MultiMapManager::updateMapChunk(const std::vector<uint32_t>& adrs) {
     // This is called once after each point cloud update
 
     // Append new addresses to the buffer
@@ -64,10 +64,11 @@ void MultiMapManager::updateMapChunk(const std::vector<uint32_t>& adrs) {
         tmp.insert(tmp.end(), adr_buffer_.begin() + i, adr_buffer_.end());
         adr_buffer_ = tmp;
     }
+    return multi_map_chunks_[robot_id_].chunks_.size();
 }
 
 void MultiMapManager::sendStamp(double time,
-                                    environment_map_msgs::msg::ChunkStamps& msg) {
+                                environment_map_msgs::msg::ChunkStamps& msg) {
     // Send stamp of chunks to other robots
     msg.from_robot_id = robot_id_;
     msg.time = time;
@@ -80,7 +81,8 @@ void MultiMapManager::sendStamp(double time,
 }
 
 void MultiMapManager::receiveStamp(const environment_map_msgs::msg::ChunkStamps& msg_in,
-                                   std::vector<environment_map_msgs::msg::ChunkData>& msgs_out) {
+                                   std::vector<environment_map_msgs::msg::ChunkData>& msgs_out,
+                                   std::vector<std::vector<int>>& all_missed) {
     if (msg_in.from_robot_id == robot_id_) return;
 
     // Check msg time to avoid overwhelming
@@ -88,12 +90,14 @@ void MultiMapManager::receiveStamp(const environment_map_msgs::msg::ChunkStamps&
     
     last_chunk_stamp_time_[msg_in.from_robot_id] = msg_in.time;
 
+    all_missed.resize(multi_map_chunks_.size());
     // Check others' stamp info and send chunks unknown by them
     for (int i = 0; i < multi_map_chunks_.size(); ++i) {
         if (i == msg_in.from_robot_id) continue;
         std::vector<int> missed;
         findMissedChunkIds(multi_map_chunks_[i].idx_list_, msg_in.idx_lists[i].ids, missed);
         sendChunks(i, msg_in.from_robot_id, missed, msgs_out);
+        all_missed[i] = missed;
     }
 }
 
@@ -194,6 +198,10 @@ void MultiMapManager::receiveChunk(const environment_map_msgs::msg::ChunkData& m
     buffer_map_[msg.chunk_robot_id][msg.idx] = 1;
 }
 
+int MultiMapManager::getNumChunksInBuffer(int chunk_robot_id) {
+    return chunk_buffer_[chunk_robot_id].size();
+}
+
 int MultiMapManager::processChunkBuffer(bool reset_frontier_chunks) {
     // Process chunks in buffers
     int chunks_inserted = 0;
@@ -240,7 +248,7 @@ int MultiMapManager::processChunkBuffer(bool reset_frontier_chunks) {
             if (chunk.empty_) {  // Only insert a chunk once
                 chunk.voxel_adrs_ = msg.voxel_adrs;
                 chunk.voxel_occ_ = msg.voxel_occ;
-                map_->manualUpdate(chunk.voxel_adrs_, chunk.voxel_occ_);
+                map_->chunkUpdate(chunk.voxel_adrs_, chunk.voxel_occ_);
                 chunk.empty_ = false;
                 chunks_inserted++;
             }

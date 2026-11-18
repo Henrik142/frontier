@@ -8,6 +8,7 @@ find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 
 find_package(environment_map REQUIRED)
+find_package(environment_map_msgs REQUIRED)
 find_package(frontier_manager REQUIRED)
 find_package(frontier_perception REQUIRED)
 find_package(path_searching REQUIRED)
@@ -70,6 +71,7 @@ target_include_directories(frontier_simulation PUBLIC
 
 ament_target_dependencies(frontier_simulation
   environment_map
+  environment_map_msgs
   frontier_perception
   frontier_manager
   path_searching
@@ -162,6 +164,7 @@ install(
 ament_export_targets(frontier_simulationTargets HAS_LIBRARY_TARGET)
 ament_export_dependencies(
   environment_map
+  environment_map_msgs
   frontier_perception
   frontier_manager
   path_searching

@@ -120,7 +120,7 @@ private:
     void getUpdatedBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
     bool getChunkBoxes(std::vector<Eigen::Vector2i>& bmin, 
                        std::vector<Eigen::Vector2i>& bmax) const;
-    bool getChunksFrontiersAdrs(std::vector<int>& adrs) const;
+    bool getChunksFreeAdrs(std::vector<int>& adrs) const;
     void inflateBox(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax, const Eigen::Vector2d& inflation_size) const;
     void fitToMap(Eigen::Vector2i& bmin, Eigen::Vector2i& bmax) const;
 

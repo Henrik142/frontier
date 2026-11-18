@@ -302,7 +302,7 @@ int PathPlanningManager::pathPlanningCallback() {
 
     // Acquire the most recent map and set it for all consumers
     bool reset_updated_box = true;
-    bool reset_chunks = most_recent_map_->areNewChunksPublished();
+    bool reset_chunks = true;
     most_recent_map_ = planning_maps_->acquire(reset_updated_box, reset_chunks);
     frontier_finder_->setMap(most_recent_map_);
     ViewNode::map_ = most_recent_map_;
@@ -328,9 +328,12 @@ int PathPlanningManager::pathPlanningCallback() {
 
     double t1_frontier_update = this->now().seconds();
 
-    std::vector<int> chunks_frontiers_adrs;
-    most_recent_map_->getChunksFrontiersAdrs(chunks_frontiers_adrs);
-    RCLCPP_INFO(this->get_logger(), "Chunks frontiers addresses: %zu", chunks_frontiers_adrs.size());
+    std::vector<int> chunks_free_adrs;
+    std::vector<Eigen::Vector2i> bmin, bmax;
+    most_recent_map_->getChunksFreeAdrs(chunks_free_adrs);
+    most_recent_map_->getChunkBoxes(bmin, bmax);
+    RCLCPP_INFO(this->get_logger(), "Chunks free addresses: %zu", chunks_free_adrs.size());
+    RCLCPP_INFO(this->get_logger(), "Chunk boxes: %zu", bmin.size());
 
     // find frontiers, sample viewpoints
     frontier_finder_->findFrontiers();
